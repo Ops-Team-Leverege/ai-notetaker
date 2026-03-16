@@ -142,10 +142,7 @@ export class MeetingBot {
 
             // Click join
             const joinBtn = this.page.locator('text=Join, button:has-text("Join")').first();
-            await joinBtn.click({
-                timeout: JOIN_TIM
-EOUT_MS
-            });
+            await joinBtn.click({ timeout: JOIN_TIMEOUT_MS });
 
             // Handle waiting room
             await this.handleWaitingRoom();
