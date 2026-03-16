@@ -1,0 +1,24 @@
+[project]
+name = "meeting-notetaker-transcription-worker"
+version = "1.0.0"
+description = "Transcription Worker (Cloud Run) for Leverege Meeting Notetaker"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0.0",
+    "google-cloud-tasks>=2.14.0",
+    "google-cloud-compute>=1.14.0",
+    "google-cloud-sql-connector>=1.4.0",
+    "google-cloud-storage>=2.14.0",
+    "pg8000>=1.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "hypothesis>=6.92.0",
+    "pytest-cov>=4.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"

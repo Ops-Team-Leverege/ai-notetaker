@@ -1,0 +1,33 @@
+{
+    "name": "meeting-notetaker-web-ui",
+    "version": "1.0.0",
+    "description": "React Web UI for Leverege Meeting Notetaker",
+    "scripts": {
+        "build": "tsc && vite build",
+        "dev": "vite",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "lint": "eslint 'src/**/*.{ts,tsx}'",
+        "format": "prettier --write 'src/**/*.{ts,tsx}'"
+    },
+    "dependencies": {
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.21.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/react": "^18.2.48",
+        "@types/react-dom": "^18.2.18",
+        "@typescript-eslint/eslint-plugin": "^6.19.0",
+        "@typescript-eslint/parser": "^6.19.0",
+        "@vitejs/plugin-react": "^4.2.1",
+        "eslint": "^8.56.0",
+        "fast-check": "^3.15.0",
+        "jsdom": "^29.0.0",
+        "prettier": "^3.2.4",
+        "typescript": "^5.3.3",
+        "vite": "^5.0.12",
+        "vitest": "^1.2.0"
+    }
+}

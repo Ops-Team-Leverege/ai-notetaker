@@ -1,0 +1,24 @@
+[project]
+name = "meeting-notetaker-pipeline"
+version = "1.0.0"
+description = "Transcription Pipeline (T4 GPU) for Leverege Meeting Notetaker"
+requires-python = ">=3.11"
+dependencies = [
+    "openai-whisper>=20231117",
+    "pyannote.audio>=3.1.0",
+    "google-cloud-storage>=2.14.0",
+    "google-cloud-sql-connector>=1.4.0",
+    "pg8000>=1.30.0",
+    "torch>=2.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "hypothesis>=6.92.0",
+    "pytest-cov>=4.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
