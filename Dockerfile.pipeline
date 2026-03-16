@@ -1,0 +1,11 @@
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+RUN apt-get update && apt-get install -y \
+  python3.11 python3-pip ffmpeg \
+  --no-install-recommends && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY pipeline/requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
+RUN python3 -c "import whisper; whisper.load_model('base')"
+COPY pipeline/src ./src
+ENV PYTHONUNBUFFERED=1
+CMD ["python3", "src/main.py"]

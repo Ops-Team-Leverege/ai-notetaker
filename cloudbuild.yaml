@@ -1,0 +1,180 @@
+substitutions:
+  _REGION: us-central1
+  _PROJECT: ai-meeting-notetaker-490206
+  _SA_NOTETAKER_BOT: notetaker-bot@ai-meeting-notetaker-490206.iam.gserviceaccount.com
+  _SA_TRANSCRIPTION_WORKER: transcription-worker@ai-meeting-notetaker-490206.iam.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.api
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api:latest
+      - .
+
+  - id: build-bot
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.bot
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/bot:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/bot:latest
+      - .
+    waitFor: ['-']
+
+  - id: build-transcription-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.transcription-worker
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/transcription-worker:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/transcription-worker:latest
+      - .
+    waitFor: ['-']
+
+  - id: build-web-ui
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.web-ui
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui:latest
+      - .
+    waitFor: ['-']
+
+  - id: push-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api
+    waitFor: [build-api]
+
+  - id: push-bot
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/bot
+    waitFor: [build-bot]
+
+  - id: push-transcription-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/transcription-worker
+    waitFor: [build-transcription-worker]
+
+  - id: push-web-ui
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui
+    waitFor: [build-web-ui]
+
+  - id: deploy-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - api
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_SA_NOTETAKER_BOT}
+      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest
+      - --set-secrets=GOOGLE_OAUTH_CREDENTIALS=google-oauth-credentials:latest
+      - --add-cloudsql-instances=${_PROJECT}:${_REGION}:leverege-notetaker-db
+      - --allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=10
+      - --memory=512Mi
+      - --cpu=1
+    waitFor: [push-api]
+
+  - id: deploy-bot
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - bot
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/bot:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_SA_NOTETAKER_BOT}
+      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest
+      - --set-secrets=ZOOM_CREDENTIALS=zoom-account-credentials:latest
+      - --set-secrets=MICROSOFT_CREDENTIALS=microsoft-account-credentials:latest
+      - --add-cloudsql-instances=${_PROJECT}:${_REGION}:leverege-notetaker-db
+      - --no-allow-unauthenticated
+      - --min-instances=0
+      - --max-instances=5
+      - --memory=2Gi
+      - --cpu=2
+      - --timeout=3600
+    waitFor: [push-bot]
+
+  - id: deploy-transcription-worker
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - transcription-worker
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/transcription-worker:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_SA_TRANSCRIPTION_WORKER}
+      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest
+      - --add-cloudsql-instances=${_PROJECT}:${_REGION}:leverege-notetaker-db
+      - --no-allow-unauthenticated
+      - --min-instances=0
+      - --max-instances=5
+      - --memory=512Mi
+      - --cpu=1
+      - --timeout=3600
+    waitFor: [push-transcription-worker]
+
+  - id: deploy-web-ui
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - web-ui
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --min-instances=1
+      - --max-instances=10
+      - --memory=256Mi
+      - --cpu=1
+    waitFor: [push-web-ui]
+
+images:
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/bot:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/transcription-worker:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui:$COMMIT_SHA
