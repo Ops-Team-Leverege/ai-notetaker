@@ -1,10 +1,16 @@
+FROM node:20-slim AS builder
+WORKDIR /app
+COPY api/package*.json ./
+RUN npm ci
+COPY api/src ./src
+COPY api/tsconfig.json ./
+RUN npx tsc
+
 FROM node:20-slim
 WORKDIR /app
 COPY api/package*.json ./
-RUN npm ci --only=production
-COPY api/src ./src
-COPY api/tsconfig.json ./
-RUN npm install -g typescript && tsc
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
 EXPOSE 8080
 ENV NODE_ENV=production
 ENV PORT=8080

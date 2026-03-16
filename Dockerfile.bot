@@ -1,3 +1,11 @@
+FROM node:20-slim AS builder
+WORKDIR /app
+COPY bot/package*.json ./
+RUN npm ci
+COPY bot/src ./src
+COPY bot/tsconfig.json ./
+RUN npx tsc
+
 FROM node:20-slim
 RUN apt-get update && apt-get install -y \
   chromium chromium-driver fonts-liberation libasound2 \
@@ -8,11 +16,9 @@ RUN apt-get update && apt-get install -y \
   --no-install-recommends && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY bot/package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 RUN npx playwright install chromium
-COPY bot/src ./src
-COPY bot/tsconfig.json ./
-RUN npm install -g typescript && tsc
+COPY --from=builder /app/dist ./dist
 EXPOSE 8080
 ENV NODE_ENV=production
 ENV PORT=8080
