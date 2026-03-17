@@ -75,16 +75,17 @@ export class MeetingBot {
         await this.page.goto(this.options.meetingUrl, { timeout: JOIN_TIMEOUT_MS });
 
         // Platform-specific join flow
+        // Zoom and Teams use cloud recording webhooks — no Playwright bot needed.
+        // The bot only joins Google Meet external meetings via Playwright.
         switch (this.options.platform) {
             case 'google_meet':
                 await this.joinGoogleMeet(creds);
                 break;
             case 'zoom':
-                await this.joinZoom(creds);
-                break;
             case 'teams':
-                await this.joinTeams(creds);
-                break;
+                throw new Error(
+                    `Platform "${this.options.platform}" uses cloud recording webhooks, not the Playwright bot`,
+                );
         }
     }
 
@@ -127,70 +128,6 @@ export class MeetingBot {
         await this.handleWaitingRoom();
 
         this.options.onStatusChange('in_meeting');
-    }
-
-    private async joinZoom(creds: Record<string, string>): Promise<void> {
-        if (!this.page) return;
-
-        // Zoom web client join flow
-        try {
-            // Enter name
-            const nameInput = this.page.locator('input[placeholder*="name"]');
-            if (await nameInput.isVisible({ timeout: 5000 })) {
-                await nameInput.fill('Notetaker');
-            }
-
-            // Click join
-            const joinBtn = this.page.locator('text=Join, button:has-text("Join")').first();
-            await joinBtn.click({ timeout: JOIN_TIMEOUT_MS });
-
-            // Handle waiting room
-            await this.handleWaitingRoom();
-
-            this.options.onStatusChange('in_meeting');
-        } catch (err) {
-            console.error('Zoom join failed:', err);
-            throw err;
-        }
-    }
-
-    private async joinTeams(creds: Record<string, string>): Promise<void> {
-        if (!this.page) return;
-
-        // Teams web client join flow
-        try {
-            // Click "Continue on this browser"
-            const continueBtn = this.page.locator('text=Continue on this browser');
-            if (await continueBtn.isVisible({ timeout: 5000 })) {
-                await continueBtn.click();
-            }
-
-            // Enter name
-            const nameInput = this.page.locator('input[placeholder*="name"]');
-            if (await nameInput.isVisible({ timeout: 5000 })) {
-                await nameInput.fill('Notetaker');
-            }
-
-            // Turn off camera/mic
-            try {
-                await this.page.click('[aria-label*="camera"]', { timeout: 3000 });
-                await this.page.click('[aria-label*="microphone"]', { timeout: 3000 });
-            } catch {
-                // May not be visible
-            }
-
-            // Click join
-            const joinBtn = this.page.locator('text=Join now, button:has-text("Join")').first();
-            await joinBtn.click({ timeout: JOIN_TIMEOUT_MS });
-
-            // Handle lobby
-            await this.handleWaitingRoom();
-
-            this.options.onStatusChange('in_meeting');
-        } catch (err) {
-            console.error('Teams join failed:', err);
-            throw err;
-        }
     }
 
     private async handleWaitingRoom(): Promise<void> {
