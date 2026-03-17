@@ -14,4 +14,6 @@ export const rateLimitMiddleware = rateLimit({
     message: { error: 'Too many requests. Please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
+    // Suppress ERR_ERL_KEY_GEN_IPV6 — we key on user email, IP is only a fallback
+    validate: { ip: false },
 });
