@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.bot import generate_sdk_jwt, hash_user_email, pcm_to_wav
+from src.bot import (
+    generate_sdk_jwt,
+    hash_user_email,
+    pcm_to_wav,
+    get_s2s_access_token,
+    fetch_zak_token,
+)
 
 
 class TestGenerateSdkJwt:
@@ -81,6 +87,57 @@ class TestPcmToWav:
             frames = wf.readframes(wf.getnframes())
             recovered = struct.unpack(f"<{len(samples)}h", frames)
             assert list(recovered) == samples
+
+
+class TestGetS2sAccessToken:
+    @patch("src.bot.requests.post")
+    def test_returns_access_token(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"access_token": "s2s-token-123", "token_type": "bearer", "expires_in": 3600}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        creds = {"account_id": "acc-1", "client_id": "cid", "client_secret": "csec"}
+        token = get_s2s_access_token(creds)
+        assert token == "s2s-token-123"
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args
+        assert "zoom.us/oauth/token" in call_kwargs[0][0]
+
+    @patch("src.bot.requests.post")
+    def test_raises_on_http_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = Exception("401 Unauthorized")
+        mock_post.return_value = mock_resp
+
+        creds = {"account_id": "acc-1", "client_id": "cid", "client_secret": "csec"}
+        with pytest.raises(Exception, match="401"):
+            get_s2s_access_token(creds)
+
+
+class TestFetchZakToken:
+    @patch("src.bot.requests.get")
+    def test_returns_zak_token(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"token": "zak-token-abc"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        token = fetch_zak_token("s2s-access-token")
+        assert token == "zak-token-abc"
+        mock_get.assert_called_once()
+        call_args = mock_get.call_args
+        assert "users/me/token" in call_args[0][0]
+        assert call_args[1]["headers"]["Authorization"] == "Bearer s2s-access-token"
+
+    @patch("src.bot.requests.get")
+    def test_raises_on_http_error(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = Exception("403 Forbidden")
+        mock_get.return_value = mock_resp
+
+        with pytest.raises(Exception, match="403"):
+            fetch_zak_token("bad-token")
 
 
 class TestFlaskApp:

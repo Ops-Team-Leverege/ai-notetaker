@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import jwt
+import requests
 
 logging.basicConfig(level=logging.INFO, format="[zoom-bot] %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -74,12 +75,45 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = SDK_SAMPLE_RATE) -> bytes:
 
 
 def fetch_sdk_credentials() -> dict:
-    """Fetch Zoom SDK credentials from Secret Manager."""
+    """Fetch Zoom S2S OAuth credentials from Secret Manager (zoom-account-credentials)."""
     from google.cloud import secretmanager
     client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{PROJECT_ID}/secrets/zoom-sdk-credentials/versions/latest"
+    name = f"projects/{PROJECT_ID}/secrets/zoom-account-credentials/versions/latest"
     response = client.access_secret_version(request={"name": name})
     return json.loads(response.payload.data.decode("utf-8"))
+
+
+def get_s2s_access_token(creds: dict) -> str:
+    """Get a Zoom S2S OAuth access token using account_credentials grant."""
+    basic_auth = (creds["client_id"], creds["client_secret"])
+    resp = requests.post(
+        "https://zoom.us/oauth/token",
+        auth=basic_auth,
+        data={
+            "grant_type": "account_credentials",
+            "account_id": creds["account_id"],
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def fetch_zak_token(access_token: str) -> str:
+    """Fetch a ZAK token for the authenticated user (ai-notetaker@leverege.com).
+
+    The ZAK token is required since Feb 23, 2026 for Zoom OBF compliance.
+    It expires after 90 minutes — fetch a fresh one per meeting join.
+    """
+    resp = requests.get(
+        "https://api.zoom.us/v2/users/me/token",
+        params={"type": "zak"},
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()["token"]
 
 
 def upload_wav_to_gcs(wav_data: bytes, meeting_id: str, owning_user: str) -> str:
@@ -149,6 +183,7 @@ class ZoomMeetingBot:
         self._pcm_chunks: list[bytes] = []
         self._is_recording = False
         self._meeting_ended = False
+        self._zak_token: Optional[str] = None
 
         # GLib main loop
         self._main_loop = None
@@ -160,8 +195,12 @@ class ZoomMeetingBot:
         gi.require_version("GLib", "2.0")
         from gi.repository import GLib
 
-        # Fetch credentials and init SDK
+        # Fetch credentials, get ZAK token, and init SDK
         creds = fetch_sdk_credentials()
+        access_token = get_s2s_access_token(creds)
+        self._zak_token = fetch_zak_token(access_token)
+        logger.info("Fetched ZAK token for meeting join")
+
         self._init_sdk(creds)
 
         # Set up signal handlers for clean shutdown
@@ -232,7 +271,7 @@ class ZoomMeetingBot:
             self._request_shutdown()
 
     def _join_meeting(self) -> None:
-        """Join the Zoom meeting by number + passcode."""
+        """Join the Zoom meeting by number + passcode with ZAK token auth."""
         import zoom_meeting_sdk as zoom
 
         join_param = zoom.JoinParam()
@@ -242,6 +281,7 @@ class ZoomMeetingBot:
         param.meetingNumber = self.meeting_number
         param.userName = self.display_name
         param.psw = self.passcode
+        param.userZAK = self._zak_token
         param.isVideoOff = True
         param.isAudioOff = True
         param.isAudioRawDataStereo = False
