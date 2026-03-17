@@ -5,14 +5,16 @@ Uses zoom-meeting-sdk Python bindings (https://pypi.org/project/zoom-meeting-sdk
 Runs inside Docker with PulseAudio virtual sink for headless audio.
 
 Flow:
-  1. Fetch SDK credentials from Secret Manager
-  2. Generate JWT for SDK auth
-  3. Join meeting by number + passcode
-  4. Subscribe to raw audio data callback
-  5. Accumulate PCM frames → WAV on meeting end
-  6. Upload WAV to GCS
-  7. Enqueue Cloud Tasks transcription job
-  8. Exit
+  1. Fetch SDK credentials from Secret Manager (zoom-sdk-credentials)
+  2. Fetch S2S OAuth credentials from Secret Manager (zoom-account-credentials)
+  3. Get S2S access token → fetch ZAK token for meeting join
+  4. Generate JWT for SDK auth using SDK credentials
+  5. Join meeting by number + passcode + ZAK token
+  6. Subscribe to raw audio data callback
+  7. Accumulate PCM frames → WAV on meeting end
+  8. Upload WAV to GCS
+  9. Enqueue Cloud Tasks transcription job
+  10. Exit
 """
 
 import os
@@ -75,7 +77,24 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = SDK_SAMPLE_RATE) -> bytes:
 
 
 def fetch_sdk_credentials() -> dict:
-    """Fetch Zoom S2S OAuth credentials from Secret Manager (zoom-account-credentials)."""
+    """Fetch Meeting SDK credentials from Secret Manager (zoom-sdk-credentials).
+
+    Returns {"client_id":"...","client_secret":"..."} from the General App.
+    Used to initialize and authenticate the Zoom Meeting SDK.
+    """
+    from google.cloud import secretmanager
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{PROJECT_ID}/secrets/zoom-sdk-credentials/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return json.loads(response.payload.data.decode("utf-8"))
+
+
+def fetch_s2s_credentials() -> dict:
+    """Fetch S2S OAuth credentials from Secret Manager (zoom-account-credentials).
+
+    Returns {"account_id":"...","client_id":"...","client_secret":"..."} from the S2S OAuth App.
+    Used to obtain access tokens for the Zoom REST API (ZAK token fetch).
+    """
     from google.cloud import secretmanager
     client = secretmanager.SecretManagerServiceClient()
     name = f"projects/{PROJECT_ID}/secrets/zoom-account-credentials/versions/latest"
@@ -195,13 +214,16 @@ class ZoomMeetingBot:
         gi.require_version("GLib", "2.0")
         from gi.repository import GLib
 
-        # Fetch credentials, get ZAK token, and init SDK
-        creds = fetch_sdk_credentials()
-        access_token = get_s2s_access_token(creds)
+        # Fetch credentials from two separate secrets
+        # zoom-sdk-credentials → General App → SDK auth
+        sdk_creds = fetch_sdk_credentials()
+        # zoom-account-credentials → S2S OAuth App → ZAK token
+        s2s_creds = fetch_s2s_credentials()
+        access_token = get_s2s_access_token(s2s_creds)
         self._zak_token = fetch_zak_token(access_token)
         logger.info("Fetched ZAK token for meeting join")
 
-        self._init_sdk(creds)
+        self._init_sdk(sdk_creds)
 
         # Set up signal handlers for clean shutdown
         signal.signal(signal.SIGINT, self._on_signal)
