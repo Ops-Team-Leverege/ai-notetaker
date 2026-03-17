@@ -71,7 +71,7 @@ export async function getZoomAccessToken(): Promise<string> {
         throw new Error(`Zoom OAuth failed (${resp.status}): ${text}`);
     }
 
-    const data: ZoomTokenResponse = await resp.json();
+    const data = (await resp.json()) as ZoomTokenResponse;
 
     // Cache with 60s buffer before expiry
     cachedToken = {

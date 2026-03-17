@@ -70,7 +70,7 @@ export async function getGraphAccessToken(): Promise<string> {
         throw new Error(`Graph OAuth failed (${resp.status}): ${text}`);
     }
 
-    const data: GraphTokenResponse = await resp.json();
+    const data = (await resp.json()) as GraphTokenResponse;
 
     cachedToken = {
         token: data.access_token,
