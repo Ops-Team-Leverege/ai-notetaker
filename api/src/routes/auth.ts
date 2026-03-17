@@ -15,9 +15,13 @@ router.get('/login', (req: Request, res: Response) => {
         // Use the origin that the user is actually on (web UI via proxy)
         const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
         const redirectUri = `${origin}/api/auth/callback`;
+        console.log('[auth] Login redirect URI:', redirectUri);
+        console.log('[auth] OAuth client_id prefix:', creds.clientId?.substring(0, 12) + '...');
         const url = initiateLogin(redirectUri, creds.clientId);
+        console.log('[auth] Redirecting to:', url.substring(0, 80) + '...');
         res.redirect(url);
-    } catch (err) {
+    } catch (err: any) {
+        console.error('[auth] Login failed:', err.message || err);
         res.status(500).json({ error: 'Failed to initiate login' });
     }
 });
@@ -71,6 +75,7 @@ router.get('/callback', async (req: Request, res: Response) => {
     try {
         const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
         const redirectUri = `${origin}/api/auth/callback`;
+        console.log('[auth] GET /callback — code length:', code.length, 'redirectUri:', redirectUri);
         const session = await handleCallback(code, redirectUri);
 
         res.cookie('session', session.token, {
@@ -83,7 +88,9 @@ router.get('/callback', async (req: Request, res: Response) => {
         // Redirect to the web UI root after successful login
         const homeUrl = FRONTEND_URL || '/';
         res.redirect(homeUrl);
-    } catch (err) {
+    } catch (err: any) {
+        console.error('[auth] GET /callback failed:', err.message || err);
+        console.error('[auth] redirectUri used:', `${FRONTEND_URL || req.protocol + '://' + req.get('host')}/api/auth/callback`);
         res.status(401).send('Authentication failed');
     }
 });

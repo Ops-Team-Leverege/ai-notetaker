@@ -26,10 +26,10 @@ function getOAuthCredentials(): OAuthCredentials {
         throw new Error('GOOGLE_OAUTH_CREDENTIALS env var is not set');
     }
 
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw.trim());
     cachedCredentials = {
-        clientId: parsed.client_id,
-        clientSecret: parsed.client_secret,
+        clientId: (parsed.client_id || '').trim(),
+        clientSecret: (parsed.client_secret || '').trim(),
     };
 
     return cachedCredentials;
