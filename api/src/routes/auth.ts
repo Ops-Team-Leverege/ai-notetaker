@@ -9,9 +9,9 @@ const FRONTEND_URL = process.env.FRONTEND_URL || '';
 /**
  * GET /api/auth/login — Redirect to Google SSO login flow.
  */
-router.get('/login', async (req: Request, res: Response) => {
+router.get('/login', (req: Request, res: Response) => {
     try {
-        const creds = await getClientCredentials();
+        const creds = getClientCredentials();
         // Use the origin that the user is actually on (web UI via proxy)
         const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
         const redirectUri = `${origin}/api/auth/callback`;

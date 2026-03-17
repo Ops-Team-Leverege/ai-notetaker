@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
-import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { getPool } from '../db';
 import { Session, User } from '../types';
 
@@ -14,31 +13,32 @@ interface OAuthCredentials {
 let cachedCredentials: OAuthCredentials | null = null;
 let oauthClient: OAuth2Client | null = null;
 
-async function getOAuthCredentials(): Promise<OAuthCredentials> {
+/**
+ * Read OAuth credentials from GOOGLE_OAUTH_CREDENTIALS env var.
+ * The value is a JSON string: {"client_id":"...","client_secret":"..."}
+ * Mounted from Secret Manager via Cloud Run --set-secrets.
+ */
+function getOAuthCredentials(): OAuthCredentials {
     if (cachedCredentials) return cachedCredentials;
 
-    const secretManager = new SecretManagerServiceClient();
-    const projectId = process.env.GCP_PROJECT_ID || '';
+    const raw = process.env.GOOGLE_OAUTH_CREDENTIALS;
+    if (!raw) {
+        throw new Error('GOOGLE_OAUTH_CREDENTIALS env var is not set');
+    }
 
-    const [clientIdVersion] = await secretManager.accessSecretVersion({
-        name: `projects/${projectId}/secrets/google-oauth-client-id/versions/latest`,
-    });
-    const [clientSecretVersion] = await secretManager.accessSecretVersion({
-        name: `projects/${projectId}/secrets/google-oauth-client-secret/versions/latest`,
-    });
-
+    const parsed = JSON.parse(raw);
     cachedCredentials = {
-        clientId: clientIdVersion.payload?.data?.toString() || '',
-        clientSecret: clientSecretVersion.payload?.data?.toString() || '',
+        clientId: parsed.client_id,
+        clientSecret: parsed.client_secret,
     };
 
     return cachedCredentials;
 }
 
-async function getOAuthClient(redirectUri?: string): Promise<OAuth2Client> {
+function getOAuthClient(redirectUri?: string): OAuth2Client {
     if (oauthClient && !redirectUri) return oauthClient;
 
-    const creds = await getOAuthCredentials();
+    const creds = getOAuthCredentials();
     const client = new OAuth2Client(creds.clientId, creds.clientSecret, redirectUri);
 
     if (!redirectUri) {
@@ -65,7 +65,7 @@ export function initiateLogin(redirectUri: string, clientId: string): string {
  * Exchange authorization code for tokens, extract user info, create session in Cloud SQL.
  */
 export async function handleCallback(code: string, redirectUri: string): Promise<Session> {
-    const creds = await getOAuthCredentials();
+    const creds = getOAuthCredentials();
     const client = new OAuth2Client(creds.clientId, creds.clientSecret, redirectUri);
 
     const { tokens } = await client.getToken(code);
@@ -149,8 +149,8 @@ export async function cleanupExpiredSessions(): Promise<number> {
 }
 
 /**
- * Fetch OAuth credentials from Secret Manager (for use in routes).
+ * Return OAuth credentials parsed from env var (for use in routes).
  */
-export async function getClientCredentials(): Promise<OAuthCredentials> {
+export function getClientCredentials(): OAuthCredentials {
     return getOAuthCredentials();
 }

@@ -6,7 +6,7 @@ import express from 'express';
 vi.mock('../services/auth', () => ({
     handleCallback: vi.fn(),
     logout: vi.fn(),
-    getClientCredentials: vi.fn().mockResolvedValue({ clientId: 'test-id', clientSecret: 'test-secret' }),
+    getClientCredentials: vi.fn().mockReturnValue({ clientId: 'test-id', clientSecret: 'test-secret' }),
     initiateLogin: vi.fn().mockReturnValue('https://accounts.google.com/o/oauth2/auth?test=1'),
 }));
 
