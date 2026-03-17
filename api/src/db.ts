@@ -4,8 +4,10 @@ let pool: Pool | null = null;
 
 export function getPool(): Pool {
     if (!pool) {
+        const connString = (process.env.DATABASE_URL || '').trim();
+        console.log('DB connection string length:', connString.length);
         const config: PoolConfig = {
-            connectionString: process.env.DATABASE_URL,
+            connectionString: connString,
             max: 10,
             idleTimeoutMillis: 30000,
             connectionTimeoutMillis: 5000,
