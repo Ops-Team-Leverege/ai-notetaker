@@ -104,10 +104,6 @@ export async function createMeeting(
     const row = result.rows[0];
     const meeting = mapRowToMeetingMetadata(row);
 
-    // TODO: Phase 2+ — dispatch bot to join the meeting for external meetings.
-    // For Phase 1, internal Google Meet transcripts are handled via Workspace Events API.
-    // Bot dispatch will call BotOrchestrator.dispatchBot(meetingLink, meeting.meetingId, owningUser)
-
     return meeting;
 }
 

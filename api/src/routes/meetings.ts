@@ -3,13 +3,15 @@ import { authMiddleware } from '../middleware/auth';
 import { ownershipMiddleware } from '../middleware/ownership';
 import { rateLimitMiddleware } from '../middleware/rateLimit';
 import { createMeeting, listMeetings, getMeetingById, getTranscript, upsertSpeakerLabel } from '../services/meetings';
+import { dispatchBot } from '../services/botDispatch';
+import { getPool } from '../db';
 
 const router = Router();
 
 /**
  * POST /api/meetings — Submit a meeting link for capture.
- * Requires auth + rate limit. Creates meeting record with status 'pending'.
- * TODO: Phase 2+ — after creating the record, dispatch bot for external meetings.
+ * Requires auth + rate limit. Creates meeting record with status 'pending',
+ * then dispatches the appropriate bot based on platform.
  */
 router.post(
     '/',
@@ -25,6 +27,11 @@ router.post(
 
         try {
             const meeting = await createMeeting(meetingLink, req.user!.email);
+
+            // Dispatch bot asynchronously — don't block the response
+            dispatchBot(meeting.meetingId, meetingLink, meeting.platform, req.user!.email).catch(
+                (err) => console.error(`[meetings] Bot dispatch failed for ${meeting.meetingId}:`, err),
+            );
 
             // Strip meeting_link from response — it's sensitive
             const { meetingLink: _link, ...safeMetadata } = meeting;
@@ -117,6 +124,82 @@ router.get(
             }
             res.status(500).json({ error: 'Failed to retrieve transcript' });
         }
+    },
+);
+
+/**
+ * GET /api/meetings/:id/status — Server-Sent Events stream for meeting status.
+ * Polls Cloud SQL every 3 seconds and pushes status updates to the client.
+ * Closes the connection when status reaches a terminal state (completed/failed).
+ */
+router.get(
+    '/:id/status',
+    authMiddleware,
+    ownershipMiddleware,
+    async (req: Request, res: Response) => {
+        const meetingId = req.params.id;
+
+        // Set SSE headers
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no', // Disable nginx buffering
+        });
+
+        const terminalStatuses = ['completed', 'failed', 'transcription_failed'];
+        let closed = false;
+
+        async function sendStatus() {
+            if (closed) return;
+
+            try {
+                const pool = getPool();
+                const result = await pool.query(
+                    'SELECT transcription_status, updated_at FROM meetings WHERE meeting_id = $1',
+                    [meetingId],
+                );
+
+                if (result.rows.length === 0) {
+                    res.write(`data: ${JSON.stringify({ error: 'Meeting not found' })}\n\n`);
+                    cleanup();
+                    return;
+                }
+
+                const { transcription_status, updated_at } = result.rows[0];
+                const payload = {
+                    status: transcription_status,
+                    updatedAt: updated_at?.toISOString?.() ?? updated_at,
+                };
+
+                res.write(`data: ${JSON.stringify(payload)}\n\n`);
+
+                if (terminalStatuses.includes(transcription_status)) {
+                    cleanup();
+                }
+            } catch (err) {
+                if (!closed) {
+                    res.write(`data: ${JSON.stringify({ error: 'Failed to fetch status' })}\n\n`);
+                }
+            }
+        }
+
+        function cleanup() {
+            closed = true;
+            clearInterval(intervalId);
+            res.end();
+        }
+
+        // Send initial status immediately
+        await sendStatus();
+
+        // Poll every 3 seconds
+        const intervalId = setInterval(sendStatus, 3000);
+
+        // Clean up when client disconnects
+        req.on('close', () => {
+            cleanup();
+        });
     },
 );
 

@@ -51,6 +51,37 @@ router.post('/callback', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/auth/callback?code=... — Google OAuth redirect handler.
+ * Google redirects here after user consents. Exchanges code for tokens,
+ * sets session cookie, and redirects to the app root.
+ */
+router.get('/callback', async (req: Request, res: Response) => {
+    const code = req.query.code as string | undefined;
+
+    if (!code) {
+        res.status(400).send('Authorization code missing');
+        return;
+    }
+
+    try {
+        const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/callback`;
+        const session = await handleCallback(code, redirectUri);
+
+        res.cookie('session', session.token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            expires: session.expiresAt,
+        });
+
+        // Redirect to the app root after successful login
+        res.redirect('/');
+    } catch (err) {
+        res.status(401).send('Authentication failed');
+    }
+});
+
+/**
  * POST /api/auth/logout — Invalidate session (requires auth).
  */
 router.post('/logout', authMiddleware, async (req: Request, res: Response) => {
