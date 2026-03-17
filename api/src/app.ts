@@ -7,6 +7,7 @@ import internalRoutes from './routes/internal';
 
 const app = express();
 
+app.set('strict routing', false);
 app.use(express.json());
 
 // Auth routes (public + protected)
