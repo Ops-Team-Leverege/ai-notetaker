@@ -94,7 +94,7 @@ ${envString}
   restartPolicy: Never
 `;
 
-    const [operation] = await client.insert({
+    await client.insert({
         project: PROJECT_ID,
         zone: ZONE,
         instanceResource: {
@@ -145,11 +145,8 @@ ${envString}
         },
     });
 
-    // Wait for the operation to complete
-    if (operation.latestResponse) {
-        const operationsClient = client.operationsClient;
-        // Fire and forget — don't block the API response waiting for VM creation
-    }
+    // Fire and forget — don't block the API response waiting for VM creation.
+    // The VM will self-terminate when the bot container exits.
 
     return vmName;
 }
