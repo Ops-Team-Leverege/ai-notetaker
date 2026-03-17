@@ -4,13 +4,17 @@ import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
+const FRONTEND_URL = process.env.FRONTEND_URL || '';
+
 /**
  * GET /api/auth/login — Redirect to Google SSO login flow.
  */
 router.get('/login', async (req: Request, res: Response) => {
     try {
         const creds = await getClientCredentials();
-        const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/callback`;
+        // Use the origin that the user is actually on (web UI via proxy)
+        const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+        const redirectUri = `${origin}/api/auth/callback`;
         const url = initiateLogin(redirectUri, creds.clientId);
         res.redirect(url);
     } catch (err) {
@@ -31,7 +35,8 @@ router.post('/callback', async (req: Request, res: Response) => {
     }
 
     try {
-        const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/callback`;
+        const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+        const redirectUri = `${origin}/api/auth/callback`;
         const session = await handleCallback(code, redirectUri);
 
         res.cookie('session', session.token, {
@@ -64,7 +69,8 @@ router.get('/callback', async (req: Request, res: Response) => {
     }
 
     try {
-        const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/callback`;
+        const origin = FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+        const redirectUri = `${origin}/api/auth/callback`;
         const session = await handleCallback(code, redirectUri);
 
         res.cookie('session', session.token, {
@@ -74,8 +80,9 @@ router.get('/callback', async (req: Request, res: Response) => {
             expires: session.expiresAt,
         });
 
-        // Redirect to the app root after successful login
-        res.redirect('/');
+        // Redirect to the web UI root after successful login
+        const homeUrl = FRONTEND_URL || '/';
+        res.redirect(homeUrl);
     } catch (err) {
         res.status(401).send('Authentication failed');
     }
