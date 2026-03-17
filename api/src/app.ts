@@ -10,6 +10,11 @@ const app = express();
 app.set('strict routing', false);
 app.use(express.json());
 
+// Health check — must be before any auth middleware
+app.get('/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // Auth routes (public + protected)
 app.use('/api/auth', authRoutes);
 

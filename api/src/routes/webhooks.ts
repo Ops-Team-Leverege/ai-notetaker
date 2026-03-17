@@ -20,7 +20,10 @@ const PROJECT_ID = process.env.GCP_PROJECT_ID || 'ai-meeting-notetaker-490206';
 const REGION = process.env.GCP_REGION || 'us-central1';
 const QUEUE_NAME = process.env.TRANSCRIPTION_QUEUE || 'transcription-queue';
 const WORKER_URL = process.env.TRANSCRIPTION_WORKER_URL || '';
-const ZOOM_VERIFICATION_TOKEN = process.env.ZOOM_VERIFICATION_TOKEN || '';
+
+function getZoomVerificationToken(): string {
+    return process.env.ZOOM_VERIFICATION_TOKEN || '';
+}
 
 // ─── Zoom Webhook ────────────────────────────────────────────
 
@@ -32,20 +35,41 @@ const ZOOM_VERIFICATION_TOKEN = process.env.ZOOM_VERIFICATION_TOKEN || '';
  *   2. recording.completed — Cloud recording is ready for download
  */
 router.post('/zoom', async (req: Request, res: Response) => {
+    // Log every incoming request for debugging
+    console.log('[zoom-webhook] Incoming request:', {
+        event: req.body?.event,
+        hasPayload: !!req.body?.payload,
+        headers: {
+            'content-type': req.headers['content-type'],
+            'x-zm-signature': req.headers['x-zm-signature'] ? '(present)' : '(missing)',
+            'x-zm-request-timestamp': req.headers['x-zm-request-timestamp'] || '(missing)',
+        },
+    });
+
     const { event, payload } = req.body;
 
     // --- Zoom URL validation challenge (CRC) ---
     if (event === 'endpoint.url_validation') {
         const plainToken = payload?.plainToken;
         if (!plainToken) {
+            console.error('[zoom-webhook] URL validation missing plainToken');
             res.status(400).json({ error: 'Missing plainToken' });
             return;
         }
+
+        if (!getZoomVerificationToken()) {
+            console.error('[zoom-webhook] ZOOM_VERIFICATION_TOKEN env var is not set — cannot compute CRC');
+            res.status(500).json({ error: 'Server misconfiguration: missing verification token' });
+            return;
+        }
+
         const crypto = await import('crypto');
         const hashForValidate = crypto
-            .createHmac('sha256', ZOOM_VERIFICATION_TOKEN)
+            .createHmac('sha256', getZoomVerificationToken())
             .update(plainToken)
             .digest('hex');
+
+        console.log('[zoom-webhook] URL validation response:', { plainToken, encryptedToken: hashForValidate });
         res.status(200).json({ plainToken, encryptedToken: hashForValidate });
         return;
     }
@@ -54,10 +78,10 @@ router.post('/zoom', async (req: Request, res: Response) => {
     const signature = req.headers['x-zm-signature'] as string | undefined;
     const timestamp = req.headers['x-zm-request-timestamp'] as string | undefined;
 
-    if (ZOOM_VERIFICATION_TOKEN && signature && timestamp) {
+    if (getZoomVerificationToken() && signature && timestamp) {
         const crypto = await import('crypto');
         const message = `v0:${timestamp}:${JSON.stringify(req.body)}`;
-        const expectedSig = `v0=${crypto.createHmac('sha256', ZOOM_VERIFICATION_TOKEN).update(message).digest('hex')}`;
+        const expectedSig = `v0=${crypto.createHmac('sha256', getZoomVerificationToken()).update(message).digest('hex')}`;
         if (signature !== expectedSig) {
             console.error('[zoom-webhook] Invalid signature');
             res.status(401).json({ error: 'Invalid signature' });

@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 
+// Set env var before module import (read at load time)
+vi.stubEnv('ZOOM_VERIFICATION_TOKEN', 'test-secret-token');
+
 // Mock dependencies before importing the router
 vi.mock('../db', () => ({
     getPool: vi.fn().mockReturnValue({
