@@ -1,6 +1,9 @@
 server {
     listen 8080;
 
+    access_log /dev/stdout;
+    error_log /dev/stderr;
+
     # Serve static SPA files
     location / {
         root /usr/share/nginx/html;
@@ -10,7 +13,7 @@ server {
 
     # Reverse proxy /api requests to the API Cloud Run service
     location /api/ {
-        proxy_pass ${API_URL}/api/;
+        proxy_pass __API_URL__/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
         proxy_set_header X-Real-IP $remote_addr;

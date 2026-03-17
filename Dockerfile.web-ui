@@ -11,9 +11,10 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Nginx config: serve SPA + reverse proxy /api to the API service
-# API_URL is replaced at container startup via envsubst
-COPY web-ui/nginx.conf.template /etc/nginx/templates/default.conf.template
+# Copy the nginx config template (uses __API_URL__ placeholder)
+COPY web-ui/nginx.conf.template /etc/nginx/nginx.conf.template
 
+# Replace __API_URL__ with the env var at container startup, then start nginx.
+# This avoids nginx's built-in envsubst which clobbers $uri, $proxy_host, etc.
 EXPOSE 8080
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/bin/sh", "-c", "sed \"s|__API_URL__|${API_URL}|g\" /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
