@@ -59,6 +59,19 @@ steps:
       - .
     waitFor: ['-']
 
+  - id: build-zoom-bot
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.zoom-bot
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/zoom-bot:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/zoom-bot:latest
+      - .
+    waitFor: ['-']
+
   - id: push-api
     name: gcr.io/cloud-builders/docker
     args:
@@ -90,6 +103,14 @@ steps:
       - --all-tags
       - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui
     waitFor: [build-web-ui]
+
+  - id: push-zoom-bot
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/zoom-bot
+    waitFor: [build-zoom-bot]
 
   - id: deploy-api
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -173,8 +194,29 @@ steps:
       - --cpu=1
     waitFor: [push-web-ui]
 
+  - id: deploy-zoom-bot
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - zoom-bot
+      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/zoom-bot:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_SA_NOTETAKER_BOT}
+      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest
+      - --no-allow-unauthenticated
+      - --min-instances=0
+      - --max-instances=5
+      - --memory=2Gi
+      - --cpu=2
+      - --timeout=3600
+    waitFor: [push-zoom-bot]
+
 images:
   - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api:$COMMIT_SHA
   - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/bot:$COMMIT_SHA
   - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/transcription-worker:$COMMIT_SHA
   - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/web-ui:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/zoom-bot:$COMMIT_SHA

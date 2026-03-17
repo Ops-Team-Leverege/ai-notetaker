@@ -1,0 +1,65 @@
+# Zoom Meeting SDK bot — headless Docker container
+# Based on the official py-zoom-meeting-sdk Dockerfile
+FROM --platform=linux/amd64 ubuntu:22.04
+
+SHELL ["/bin/bash", "-c"]
+ARG DEBIAN_FRONTEND=noninteractive
+
+# System dependencies required by the Zoom Meeting SDK
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    ca-certificates \
+    curl \
+    libdbus-1-3 \
+    libgbm1 \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libglib2.0-dev \
+    libssl-dev \
+    libx11-dev \
+    libx11-xcb1 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-randr0 \
+    libxcb-shape0 \
+    libxcb-shm0 \
+    libxcb-xfixes0 \
+    libxcb-xtest0 \
+    libgl1-mesa-dri \
+    libxfixes3 \
+    linux-libc-dev \
+    python3 \
+    python3-pip \
+    python3-gi \
+    python3-gi-cairo \
+    gir1.2-glib-2.0 \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# ALSA + PulseAudio for headless audio
+RUN apt-get update && apt-get install -y \
+    libasound2 libasound2-plugins alsa-utils alsa-oss \
+    pulseaudio pulseaudio-utils \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# PulseAudio config for headless operation
+RUN adduser root pulse-access && adduser root audio
+RUN mkdir -p /root/.config/pulse
+COPY zoom-bot/pulse-default.pa /root/.config/pulse/default.pa
+
+# Python dependencies
+WORKDIR /app
+COPY zoom-bot/requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Application code
+COPY zoom-bot/ .
+
+EXPOSE 8080
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Start PulseAudio in background, then run the Flask app
+CMD pulseaudio --start --exit-idle-time=-1 && \
+    python3 -m gunicorn --bind 0.0.0.0:${PORT} --timeout 120 src.app:app

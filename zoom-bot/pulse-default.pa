@@ -1,0 +1,13 @@
+# PulseAudio config for headless Zoom bot
+# Creates a virtual null sink so the SDK has an audio device
+
+.include /etc/pulse/default.pa
+
+# Load null sink as default audio output
+load-module module-null-sink sink_name=virtual_speaker sink_properties=device.description="Virtual_Speaker"
+set-default-sink virtual_speaker
+
+# Load null source as default audio input
+load-module module-null-sink sink_name=virtual_mic sink_properties=device.description="Virtual_Mic"
+load-module module-remap-source master=virtual_mic.monitor source_name=virtual_mic_source source_properties=device.description="Virtual_Mic_Source"
+set-default-source virtual_mic_source

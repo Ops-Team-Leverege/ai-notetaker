@@ -1,0 +1,8 @@
+zoom-meeting-sdk>=0.0.27
+pyjwt>=2.10.0
+google-cloud-storage>=2.14.0
+google-cloud-secret-manager>=2.20.0
+google-cloud-tasks>=2.16.0
+flask>=3.0.0
+gunicorn>=21.2.0
+PyGObject>=3.46.0
