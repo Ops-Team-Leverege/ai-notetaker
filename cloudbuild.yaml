@@ -123,8 +123,7 @@ steps:
       - --region=${_REGION}
       - --platform=managed
       - --service-account=${_SA_NOTETAKER_BOT}
-      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest
-      - --set-secrets=GOOGLE_OAUTH_CREDENTIALS=google-oauth-credentials:latest
+      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest,GOOGLE_OAUTH_CREDENTIALS=google-oauth-credentials:latest,ZOOM_VERIFICATION_TOKEN=zoom-verification-token:latest
       - --set-env-vars=FRONTEND_URL=https://web-ui-1041758325204.${_REGION}.run.app,GCP_PROJECT_ID=${_PROJECT},NODE_ENV=production
       - --add-cloudsql-instances=${_PROJECT}:${_REGION}:leverege-notetaker-db
       - --allow-unauthenticated
