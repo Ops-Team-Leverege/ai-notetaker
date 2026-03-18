@@ -19,6 +19,7 @@ Flow:
 
 import os
 import io
+import sys
 import wave
 import array
 import hashlib
@@ -34,6 +35,12 @@ import requests
 
 logger = logging.getLogger("zoom-bot")
 logger.setLevel(logging.INFO)
+
+# Ensure stdout handler exists (main.py sets this up, but be safe for direct imports)
+if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+    _stdout_handler = logging.StreamHandler(sys.stdout)
+    _stdout_handler.setFormatter(logging.Formatter("%(asctime)s [zoom-bot] %(levelname)s %(message)s"))
+    logger.addHandler(_stdout_handler)
 
 # SDK sample rate — the SDK delivers 32kHz mono PCM by default
 SDK_SAMPLE_RATE = 32000

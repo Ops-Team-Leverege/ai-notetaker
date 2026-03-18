@@ -56,10 +56,10 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Application code
 COPY zoom-bot/ .
 
-EXPOSE 8080
-ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 
-# Start PulseAudio in background, then run the Flask app
+# Start PulseAudio in background, then run the bot directly (one-shot script)
+# The bot reads BOT_MEETING_ID, BOT_MEETING_NUMBER, BOT_PASSCODE, BOT_OWNING_USER
+# from environment variables, joins the meeting, records, uploads, and exits.
 CMD pulseaudio --start --exit-idle-time=-1 && \
-    python3 -m gunicorn --bind 0.0.0.0:${PORT} --timeout 120 src.app:app
+    python3 -m src.main
