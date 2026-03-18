@@ -6,9 +6,11 @@ export type Platform = 'google_meet' | 'zoom' | 'teams';
 
 export type TranscriptionStatus =
     | 'pending'
+    | 'joining'
     | 'transcription_pending'
     | 'processing'
     | 'completed'
+    | 'failed'
     | 'transcription_failed';
 
 export type BotSessionStatus =

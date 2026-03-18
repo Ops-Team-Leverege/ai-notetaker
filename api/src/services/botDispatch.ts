@@ -211,7 +211,8 @@ export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult
                 return { dispatched: false, error: `Unknown platform: ${platform}` };
         }
     } catch (err: any) {
-        console.error(`[botDispatch] Failed to dispatch bot for meeting ${meetingId}:`, err);
+        console.error(`[botDispatch] Failed to dispatch bot for meeting ${meetingId}:`, err.message || err);
+        console.error(`[botDispatch] Full error:`, JSON.stringify({ code: err.code, status: err.status, details: err.details }, null, 2));
         await updateMeetingStatus(meetingId, 'failed');
         return { dispatched: false, error: err.message || 'VM creation failed' };
     }
