@@ -168,11 +168,12 @@ export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult
                 // Prefer explicitly provided passcode over URL-extracted one
                 const passcode = opts.passcode || urlPasscode;
                 if (!meetingNumber) {
-                    await updateMeetingStatus(meetingId, 'failed');
+                    await updateMeetingStatus(meetingId, 'transcription_failed');
                     return { dispatched: false, error: 'Could not parse Zoom meeting number from URL' };
                 }
 
                 const vmName = `zoom-bot-${meetingId.slice(0, 8)}-${timestamp}`;
+                console.log(`[botDispatch] Creating VM ${vmName} for Zoom meeting ${meetingId}`);
                 await createBotVm(vmName, `${CONTAINER_REGISTRY}/zoom-bot:latest`, {
                     BOT_MEETING_ID: meetingId,
                     BOT_MEETING_NUMBER: meetingNumber,
@@ -183,12 +184,13 @@ export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult
                     GCP_REGION: REGION,
                 });
 
-                await updateMeetingStatus(meetingId, 'joining');
+                await updateMeetingStatus(meetingId, 'processing');
                 return { dispatched: true, vmName };
             }
 
             case 'google_meet': {
                 const vmName = `meet-bot-${meetingId.slice(0, 8)}-${timestamp}`;
+                console.log(`[botDispatch] Creating VM ${vmName} for Google Meet meeting ${meetingId}`);
                 await createBotVm(vmName, `${CONTAINER_REGISTRY}/bot:latest`, {
                     BOT_MEETING_ID: meetingId,
                     BOT_MEETING_LINK: meetingLink,
@@ -198,12 +200,12 @@ export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult
                     GCP_REGION: REGION,
                 });
 
-                await updateMeetingStatus(meetingId, 'joining');
+                await updateMeetingStatus(meetingId, 'processing');
                 return { dispatched: true, vmName };
             }
 
             case 'teams': {
-                await updateMeetingStatus(meetingId, 'failed');
+                await updateMeetingStatus(meetingId, 'transcription_failed');
                 return { dispatched: false, error: 'Teams bot coming soon' };
             }
 
@@ -212,8 +214,19 @@ export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult
         }
     } catch (err: any) {
         console.error(`[botDispatch] Failed to dispatch bot for meeting ${meetingId}:`, err.message || err);
-        console.error(`[botDispatch] Full error:`, JSON.stringify({ code: err.code, status: err.status, details: err.details }, null, 2));
-        await updateMeetingStatus(meetingId, 'failed');
+        console.error(`[botDispatch] Error details:`, JSON.stringify({
+            code: err.code,
+            status: err.status,
+            statusCode: err.statusCode,
+            details: err.details,
+            errors: err.errors,
+            stack: err.stack?.split('\n').slice(0, 5),
+        }, null, 2));
+        try {
+            await updateMeetingStatus(meetingId, 'transcription_failed');
+        } catch (statusErr: any) {
+            console.error(`[botDispatch] Also failed to update status:`, statusErr.message);
+        }
         return { dispatched: false, error: err.message || 'VM creation failed' };
     }
 }
