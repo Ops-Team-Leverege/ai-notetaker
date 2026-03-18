@@ -3,11 +3,10 @@
  *
  * Dispatches the correct bot container based on platform:
  *   - zoom → zoom-bot container on e2-standard-2 VM
- *   - google_meet → playwright bot container on e2-standard-2 VM (external only)
+ *   - google_meet → playwright bot container on e2-standard-2 VM
  *   - teams → placeholder (not yet implemented)
  *
  * VMs are preemptible, terminate when the bot process exits.
- * Same pattern as the transcription pipeline GPU VMs.
  */
 
 import { getPool } from '../db';
@@ -34,13 +33,6 @@ export function parseZoomUrl(meetingLink: string): { meetingNumber: string; pass
     const meetingNumber = pathMatch ? pathMatch[1] : '';
     const passcode = url.searchParams.get('pwd') || '';
     return { meetingNumber, passcode };
-}
-
-/**
- * Check if a Google Meet link is for an internal (leverege.com) meeting.
- */
-export function isInternalMeet(owningUser: string): boolean {
-    return owningUser.endsWith('@leverege.com');
 }
 
 /**
@@ -151,22 +143,30 @@ ${envString}
     return vmName;
 }
 
+interface DispatchOptions {
+    meetingId: string;
+    meetingLink: string;
+    platform: Platform;
+    owningUser: string;
+    passcode?: string;
+    botName?: string;
+}
+
 /**
  * Dispatch a bot for the given meeting.
  * Called after createMeeting() inserts the record.
  */
-export async function dispatchBot(
-    meetingId: string,
-    meetingLink: string,
-    platform: Platform,
-    owningUser: string,
-): Promise<DispatchResult> {
+export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult> {
+    const { meetingId, meetingLink, platform, owningUser, botName } = opts;
     const timestamp = Date.now();
+    const displayName = botName || 'Leverege Notetaker';
 
     try {
         switch (platform) {
             case 'zoom': {
-                const { meetingNumber, passcode } = parseZoomUrl(meetingLink);
+                const { meetingNumber, passcode: urlPasscode } = parseZoomUrl(meetingLink);
+                // Prefer explicitly provided passcode over URL-extracted one
+                const passcode = opts.passcode || urlPasscode;
                 if (!meetingNumber) {
                     await updateMeetingStatus(meetingId, 'failed');
                     return { dispatched: false, error: 'Could not parse Zoom meeting number from URL' };
@@ -177,6 +177,7 @@ export async function dispatchBot(
                     BOT_MEETING_ID: meetingId,
                     BOT_MEETING_NUMBER: meetingNumber,
                     BOT_PASSCODE: passcode,
+                    BOT_DISPLAY_NAME: displayName,
                     BOT_OWNING_USER: owningUser,
                     GCP_PROJECT_ID: PROJECT_ID,
                     GCP_REGION: REGION,
@@ -187,17 +188,11 @@ export async function dispatchBot(
             }
 
             case 'google_meet': {
-                if (isInternalMeet(owningUser)) {
-                    // Internal leverege.com meetings use Workspace Events API path.
-                    // The meeting stays 'pending' until the Workspace Events webhook fires.
-                    return { dispatched: true };
-                }
-
-                // External Google Meet — spin up Playwright bot VM
                 const vmName = `meet-bot-${meetingId.slice(0, 8)}-${timestamp}`;
                 await createBotVm(vmName, `${CONTAINER_REGISTRY}/bot:latest`, {
                     BOT_MEETING_ID: meetingId,
                     BOT_MEETING_LINK: meetingLink,
+                    BOT_DISPLAY_NAME: displayName,
                     BOT_OWNING_USER: owningUser,
                     GCP_PROJECT_ID: PROJECT_ID,
                     GCP_REGION: REGION,
@@ -208,7 +203,6 @@ export async function dispatchBot(
             }
 
             case 'teams': {
-                // Teams bot not yet implemented
                 await updateMeetingStatus(meetingId, 'failed');
                 return { dispatched: false, error: 'Teams bot coming soon' };
             }

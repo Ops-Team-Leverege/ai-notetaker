@@ -4,14 +4,37 @@ import { useAuth } from '../context/AuthContext';
 import { MeetingSubmitForm } from './MeetingSubmitForm';
 
 interface Meeting {
-    meeting_id: string;
+    meetingId: string;
     title: string;
     platform: 'google_meet' | 'zoom' | 'teams';
-    meeting_date: string;
-    transcription_status: string;
+    transcriptionStatus: string;
+    createdAt: string;
+    updatedAt: string;
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
+
+const platformLabels: Record<string, string> = {
+    google_meet: 'Google Meet',
+    zoom: 'Zoom',
+    teams: 'Teams',
+};
+
+const platformColors: Record<string, string> = {
+    google_meet: '#0f9d58',
+    zoom: '#2d8cff',
+    teams: '#6264a7',
+};
+
+const statusLabels: Record<string, string> = {
+    pending: 'Pending',
+    joining: 'Joining',
+    transcription_pending: 'Queued',
+    processing: 'Processing',
+    completed: 'Completed',
+    failed: 'Failed',
+    transcription_failed: 'Failed',
+};
 
 export function MeetingList() {
     const { user, logout } = useAuth();
@@ -30,31 +53,13 @@ export function MeetingList() {
             });
             if (!res.ok) throw new Error('Failed to fetch meetings');
             const data = await res.json();
-            setMeetings(data.meetings || []);
+            setMeetings(Array.isArray(data) ? data : []);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Unknown error');
         } finally {
             setLoading(false);
         }
     }
-
-    function handleMeetingCreated() {
-        fetchMeetings();
-    }
-
-    const platformLabels: Record<string, string> = {
-        google_meet: 'Google Meet',
-        zoom: 'Zoom',
-        teams: 'Microsoft Teams',
-    };
-
-    const statusLabels: Record<string, string> = {
-        pending: 'Pending',
-        transcription_pending: 'Queued',
-        processing: 'Processing',
-        completed: 'Completed',
-        transcription_failed: 'Failed',
-    };
 
     if (loading) return <div className="loading">Loading meetings...</div>;
 
@@ -68,26 +73,41 @@ export function MeetingList() {
                 </div>
             </header>
 
-            <MeetingSubmitForm onSuccess={handleMeetingCreated} />
+            <MeetingSubmitForm onSuccess={fetchMeetings} />
 
-            {error && <div className="error">{error}</div>}
+            {error && <div className="error" role="alert">{error}</div>}
 
             {meetings.length === 0 ? (
-                <p>No meetings yet. Submit a meeting link above to get started.</p>
+                <p className="empty-state">No meetings yet. Submit a meeting link above to get started.</p>
             ) : (
                 <ul className="meeting-list">
-                    {meetings.map((meeting) => (
-                        <li key={meeting.meeting_id} className="meeting-item">
-                            <Link to={`/meetings/${meeting.meeting_id}`}>
-                                <div className="meeting-title">{meeting.title || 'Untitled Meeting'}</div>
-                                <div className="meeting-meta">
-                                    <span className="platform">{platformLabels[meeting.platform] || meeting.platform}</span>
-                                    <span className="date">{new Date(meeting.meeting_date).toLocaleDateString()}</span>
-                                    <span className={`status status-${meeting.transcription_status}`}>
-                                        {statusLabels[meeting.transcription_status] || meeting.transcription_status}
+                    {meetings.map((m) => (
+                        <li key={m.meetingId} className="meeting-item">
+                            <div className="meeting-card">
+                                <div className="meeting-card-top">
+                                    <span
+                                        className="platform-badge"
+                                        style={{ background: platformColors[m.platform] || '#666' }}
+                                    >
+                                        {platformLabels[m.platform] || m.platform}
+                                    </span>
+                                    <span className={`status status-${m.transcriptionStatus}`}>
+                                        {statusLabels[m.transcriptionStatus] || m.transcriptionStatus}
                                     </span>
                                 </div>
-                            </Link>
+                                <div className="meeting-title">{m.title || 'Untitled Meeting'}</div>
+                                <div className="meeting-date">
+                                    {new Date(m.createdAt).toLocaleDateString(undefined, {
+                                        year: 'numeric', month: 'short', day: 'numeric',
+                                        hour: '2-digit', minute: '2-digit',
+                                    })}
+                                </div>
+                                {m.transcriptionStatus === 'completed' && (
+                                    <Link to={`/meetings/${m.meetingId}`} className="transcript-link">
+                                        View transcript →
+                                    </Link>
+                                )}
+                            </div>
                         </li>
                     ))}
                 </ul>

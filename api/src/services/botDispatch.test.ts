@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parseZoomUrl, isInternalMeet } from './botDispatch';
+import { describe, it, expect } from 'vitest';
+import { parseZoomUrl } from './botDispatch';
 
 describe('parseZoomUrl', () => {
     it('extracts meeting number and passcode from standard Zoom URL', () => {
@@ -23,19 +23,5 @@ describe('parseZoomUrl', () => {
     it('returns empty meeting number for non-standard path', () => {
         const result = parseZoomUrl('https://zoom.us/meeting/1234567890');
         expect(result.meetingNumber).toBe('');
-    });
-});
-
-describe('isInternalMeet', () => {
-    it('returns true for leverege.com emails', () => {
-        expect(isInternalMeet('user@leverege.com')).toBe(true);
-    });
-
-    it('returns false for non-leverege emails', () => {
-        expect(isInternalMeet('user@gmail.com')).toBe(false);
-    });
-
-    it('returns false for similar but different domains', () => {
-        expect(isInternalMeet('user@notleverege.com')).toBe(false);
     });
 });

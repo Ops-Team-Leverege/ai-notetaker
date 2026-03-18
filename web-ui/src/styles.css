@@ -90,9 +90,12 @@ body {
 
 /* Meeting Submit Form */
 .meeting-submit-form {
+    margin-bottom: 24px;
+}
+
+.meeting-submit-form .form-row {
     display: flex;
     gap: 8px;
-    margin-bottom: 24px;
 }
 
 .meeting-submit-form input {
@@ -103,6 +106,16 @@ body {
     font-size: 14px;
 }
 
+.meeting-submit-form .form-extras {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.meeting-submit-form .input-small {
+    flex: 1;
+}
+
 .meeting-submit-form button {
     background: #4285f4;
     color: white;
@@ -110,6 +123,7 @@ body {
     padding: 12px 20px;
     border-radius: 4px;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .meeting-submit-form button:disabled {
@@ -119,6 +133,15 @@ body {
 
 .form-error {
     color: #c00;
+    font-size: 14px;
+    margin-top: 8px;
+}
+
+.teams-notice {
+    background: #f0edf6;
+    color: #6264a7;
+    padding: 8px 12px;
+    border-radius: 4px;
     font-size: 14px;
     margin-top: 8px;
 }
@@ -135,20 +158,55 @@ body {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.meeting-item a {
-    display: block;
-    padding: 16px;
-    text-decoration: none;
-    color: inherit;
-}
-
 .meeting-item:hover {
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
+.meeting-card {
+    padding: 16px;
+}
+
+.meeting-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.platform-badge {
+    color: white;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
 .meeting-title {
     font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.meeting-date {
+    font-size: 13px;
+    color: #888;
     margin-bottom: 8px;
+}
+
+.transcript-link {
+    color: #4285f4;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.transcript-link:hover {
+    text-decoration: underline;
+}
+
+.empty-state {
+    color: #888;
+    text-align: center;
+    padding: 32px 0;
 }
 
 .meeting-meta {

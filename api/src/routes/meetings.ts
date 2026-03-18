@@ -18,7 +18,7 @@ router.post(
     authMiddleware,
     rateLimitMiddleware,
     async (req: Request, res: Response) => {
-        const { meetingLink } = req.body;
+        const { meetingLink, passcode, botName } = req.body;
 
         if (!meetingLink || typeof meetingLink !== 'string') {
             res.status(400).json({ error: 'meetingLink is required and must be a string' });
@@ -29,7 +29,14 @@ router.post(
             const meeting = await createMeeting(meetingLink, req.user!.email);
 
             // Dispatch bot asynchronously — don't block the response
-            dispatchBot(meeting.meetingId, meetingLink, meeting.platform, req.user!.email).catch(
+            dispatchBot({
+                meetingId: meeting.meetingId,
+                meetingLink,
+                platform: meeting.platform,
+                owningUser: req.user!.email,
+                passcode: typeof passcode === 'string' ? passcode : undefined,
+                botName: typeof botName === 'string' ? botName : undefined,
+            }).catch(
                 (err) => console.error(`[meetings] Bot dispatch failed for ${meeting.meetingId}:`, err),
             );
 
