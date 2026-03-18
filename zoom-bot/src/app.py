@@ -15,11 +15,19 @@ import subprocess
 import sys
 import threading
 
+# Initialize Cloud Logging so Flask app logs appear in Cloud Logging
+try:
+    import google.cloud.logging
+    _logging_client = google.cloud.logging.Client()
+    _logging_client.setup_logging()
+except Exception:
+    pass  # Fall back to default logging if not on GCP
+
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO, format="[zoom-bot-app] %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("zoom-bot-app")
+logger.setLevel(logging.INFO)
 
 # Track active bot process
 _active_process: subprocess.Popen | None = None

@@ -32,8 +32,8 @@ from typing import Optional
 import jwt
 import requests
 
-logging.basicConfig(level=logging.INFO, format="[zoom-bot] %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("zoom-bot")
+logger.setLevel(logging.INFO)
 
 # SDK sample rate — the SDK delivers 32kHz mono PCM by default
 SDK_SAMPLE_RATE = 32000
@@ -214,16 +214,49 @@ class ZoomMeetingBot:
         gi.require_version("GLib", "2.0")
         from gi.repository import GLib
 
-        # Fetch credentials from two separate secrets
-        # zoom-sdk-credentials → General App → SDK auth
-        sdk_creds = fetch_sdk_credentials()
-        # zoom-account-credentials → S2S OAuth App → ZAK token
-        s2s_creds = fetch_s2s_credentials()
-        access_token = get_s2s_access_token(s2s_creds)
-        self._zak_token = fetch_zak_token(access_token)
-        logger.info("Fetched ZAK token for meeting join")
+        logger.info("Bot.run() starting for meeting_id=%s meeting_number=%d user=%s",
+                     self.meeting_id, self.meeting_number, self.owning_user)
 
-        self._init_sdk(sdk_creds)
+        # Fetch credentials from two separate secrets
+        try:
+            logger.info("Fetching SDK credentials from zoom-sdk-credentials...")
+            sdk_creds = fetch_sdk_credentials()
+            logger.info("SDK credentials fetched (client_id=%s...)", sdk_creds.get("client_id", "?")[:8])
+        except Exception:
+            logger.exception("Failed to fetch SDK credentials")
+            raise
+
+        try:
+            logger.info("Fetching S2S OAuth credentials from zoom-account-credentials...")
+            s2s_creds = fetch_s2s_credentials()
+            logger.info("S2S credentials fetched (account_id=%s...)", s2s_creds.get("account_id", "?")[:8])
+        except Exception:
+            logger.exception("Failed to fetch S2S credentials")
+            raise
+
+        try:
+            logger.info("Getting S2S access token...")
+            access_token = get_s2s_access_token(s2s_creds)
+            logger.info("S2S access token obtained (length=%d)", len(access_token))
+        except Exception:
+            logger.exception("Failed to get S2S access token")
+            raise
+
+        try:
+            logger.info("Fetching ZAK token...")
+            self._zak_token = fetch_zak_token(access_token)
+            logger.info("ZAK token fetched (length=%d)", len(self._zak_token))
+        except Exception:
+            logger.exception("Failed to fetch ZAK token")
+            raise
+
+        try:
+            logger.info("Initializing Zoom Meeting SDK...")
+            self._init_sdk(sdk_creds)
+            logger.info("SDK initialized successfully")
+        except Exception:
+            logger.exception("Failed to initialize SDK")
+            raise
 
         # Set up signal handlers for clean shutdown
         signal.signal(signal.SIGINT, self._on_signal)
@@ -252,14 +285,17 @@ class ZoomMeetingBot:
         init_param.emLanguageID = zoom.SDK_LANGUAGE_ID.LANGUAGE_English
         init_param.enableLogByDefault = True
 
+        logger.info("Calling zoom.InitSDK()...")
         result = zoom.InitSDK(init_param)
         if result != zoom.SDKERR_SUCCESS:
             raise RuntimeError(f"InitSDK failed: {result}")
+        logger.info("InitSDK succeeded")
 
         # Create services
         self._meeting_service = zoom.CreateMeetingService()
         self._setting_service = zoom.CreateSettingService()
         self._auth_service = zoom.CreateAuthService()
+        logger.info("SDK services created")
 
         # Set meeting event callback
         self._meeting_event = zoom.MeetingServiceEventCallbacks(
@@ -277,10 +313,11 @@ class ZoomMeetingBot:
         auth_context.jwt_token = generate_sdk_jwt(
             creds["client_id"], creds["client_secret"]
         )
+        logger.info("Calling SDKAuth with JWT (client_id=%s...)...", creds["client_id"][:8])
         auth_result = self._auth_service.SDKAuth(auth_context)
         if auth_result != zoom.SDKERR_SUCCESS:
             raise RuntimeError(f"SDKAuth failed: {auth_result}")
-        logger.info("SDK auth initiated")
+        logger.info("SDKAuth call returned success, waiting for auth callback...")
 
     def _on_auth_return(self, result) -> None:
         """Called when SDK authentication completes."""
@@ -295,6 +332,9 @@ class ZoomMeetingBot:
     def _join_meeting(self) -> None:
         """Join the Zoom meeting by number + passcode with ZAK token auth."""
         import zoom_meeting_sdk as zoom
+
+        logger.info("Preparing to join meeting %d as '%s' (ZAK length=%d)",
+                     self.meeting_number, self.display_name, len(self._zak_token or ""))
 
         join_param = zoom.JoinParam()
         join_param.userType = zoom.SDKUserType.SDK_UT_WITHOUT_LOGIN
@@ -311,11 +351,12 @@ class ZoomMeetingBot:
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
         join_result = self._meeting_service.Join(join_param)
-        logger.info("Join result: %s", join_result)
+        logger.info("Join() returned: %s", join_result)
 
         # Auto-join audio
         audio_settings = self._setting_service.GetAudioSettings()
         audio_settings.EnableAutoJoinAudio(True)
+        logger.info("Auto-join audio enabled")
 
     def _on_meeting_status_changed(self, status, iResult) -> None:
         """Called when meeting status changes."""
@@ -337,7 +378,7 @@ class ZoomMeetingBot:
         import zoom_meeting_sdk as zoom
         from gi.repository import GLib
 
-        logger.info("In meeting — setting up audio recording")
+        logger.info("In meeting %d — setting up audio recording", self.meeting_number)
 
         # Accept any recording consent reminders automatically
         self._reminder_event = zoom.MeetingReminderEventCallbacks(
@@ -441,7 +482,8 @@ class ZoomMeetingBot:
         """Clean up SDK, upload audio, enqueue transcription."""
         import zoom_meeting_sdk as zoom
 
-        logger.info("Finalizing...")
+        logger.info("Finalizing — meeting_ended=%s, chunks=%d",
+                     self._meeting_ended, len(self._pcm_chunks))
 
         # Stop recording
         if self._is_recording and self._recording_ctrl:
