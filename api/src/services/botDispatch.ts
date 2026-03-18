@@ -16,7 +16,7 @@ const PROJECT_ID = process.env.GCP_PROJECT_ID || 'ai-meeting-notetaker-490206';
 const REGION = process.env.GCP_REGION || 'us-central1';
 const ZONE = process.env.GCP_ZONE || 'us-central1-a';
 const API_URL = process.env.API_URL || '';
-const CONTAINER_REGISTRY = `gcr.io/${PROJECT_ID}`;
+const CONTAINER_REGISTRY = `${REGION}-docker.pkg.dev/${PROJECT_ID}/notetaker`;
 
 interface DispatchResult {
     dispatched: boolean;
