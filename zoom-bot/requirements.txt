@@ -7,3 +7,4 @@ google-cloud-tasks>=2.16.0
 flask>=3.0.0
 gunicorn>=21.2.0
 google-cloud-logging>=3.10.0
+google-cloud-compute>=1.19.0

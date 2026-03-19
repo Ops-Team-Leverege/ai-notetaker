@@ -155,5 +155,42 @@ def main():
         sys.exit(1)
 
 
+def _delete_own_vm():
+    """Delete this VM via the GCE metadata server + Compute API.
+
+    Called in a finally block so VMs don't accumulate after the bot exits.
+    Only runs on GCE (metadata server must be reachable).
+    """
+    try:
+        import requests as _req
+        _meta_headers = {"Metadata-Flavor": "Google"}
+        _meta_base = "http://metadata.google.internal/computeMetadata/v1"
+
+        print("[zoom-bot] Fetching VM metadata for self-deletion...", flush=True)
+        name = _req.get(f"{_meta_base}/instance/name", headers=_meta_headers, timeout=5).text
+        zone = _req.get(f"{_meta_base}/instance/zone", headers=_meta_headers, timeout=5).text.split("/")[-1]
+        project = _req.get(f"{_meta_base}/project/project-id", headers=_meta_headers, timeout=5).text
+
+        print(f"[zoom-bot] Requesting deletion of VM {name} in {zone}...", flush=True)
+        logger.info("Requesting deletion of VM %s in %s/%s", name, project, zone)
+
+        from google.cloud import compute_v1
+        compute_v1.InstancesClient().delete(project=project, zone=zone, instance=name)
+
+        print(f"[zoom-bot] VM {name} deletion requested successfully", flush=True)
+        logger.info("VM %s deletion requested successfully", name)
+    except Exception as e:
+        print(f"[zoom-bot] Failed to delete VM (may not be on GCE): {e}", flush=True)
+        logger.warning("Failed to delete VM: %s", e)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        print("[zoom-bot] Entering finally block — cleaning up VM...", flush=True)
+        logger.info("zoom-bot shutting down, deleting VM")
+        _delete_own_vm()
+        print("[zoom-bot] Goodbye.", flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
