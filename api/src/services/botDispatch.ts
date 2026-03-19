@@ -16,6 +16,9 @@ const PROJECT_ID = process.env.GCP_PROJECT_ID || 'ai-meeting-notetaker-490206';
 const REGION = process.env.GCP_REGION || 'us-central1';
 const ZONE = process.env.GCP_ZONE || 'us-central1-a';
 const API_URL = process.env.API_URL || '';
+const AUDIO_BUCKET = process.env.AUDIO_BUCKET || 'leverege-notetaker-audio';
+const TRANSCRIPTION_QUEUE = process.env.TRANSCRIPTION_QUEUE || 'transcription-queue';
+const TRANSCRIPTION_WORKER_URL = process.env.TRANSCRIPTION_WORKER_URL || '';
 const CONTAINER_REGISTRY = `${REGION}-docker.pkg.dev/${PROJECT_ID}/notetaker`;
 
 interface DispatchResult {
@@ -86,7 +89,7 @@ ${envString}
   restartPolicy: Never
 `;
 
-    await client.insert({
+    const [operation] = await client.insert({
         project: PROJECT_ID,
         zone: ZONE,
         instanceResource: {
@@ -137,9 +140,18 @@ ${envString}
         },
     });
 
-    // Fire and forget — don't block the API response waiting for VM creation.
-    // The VM will self-terminate when the bot container exits.
+    // Log the operation status — helps debug silent VM creation failures
+    console.log(`[botDispatch] VM insert operation: name=${operation.name} status=${operation.status}`);
+    if (operation.error) {
+        const errors = operation.error.errors?.map((e: any) => e.message || e.code).join(', ');
+        throw new Error(`VM creation operation failed: ${errors}`);
+    }
+    if (operation.warnings && operation.warnings.length > 0) {
+        const warns = operation.warnings.map((w: any) => w.message || w.code).join(', ');
+        console.warn(`[botDispatch] VM creation warnings: ${warns}`);
+    }
 
+    console.log(`[botDispatch] VM ${vmName} insert accepted (operation=${operation.name})`);
     return vmName;
 }
 
@@ -182,6 +194,9 @@ export async function dispatchBot(opts: DispatchOptions): Promise<DispatchResult
                     BOT_OWNING_USER: owningUser,
                     GCP_PROJECT_ID: PROJECT_ID,
                     GCP_REGION: REGION,
+                    AUDIO_BUCKET: AUDIO_BUCKET,
+                    TRANSCRIPTION_QUEUE: TRANSCRIPTION_QUEUE,
+                    TRANSCRIPTION_WORKER_URL: TRANSCRIPTION_WORKER_URL,
                 });
 
                 await updateMeetingStatus(meetingId, 'processing');
