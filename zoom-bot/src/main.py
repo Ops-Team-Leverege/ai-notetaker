@@ -4,7 +4,9 @@ Entry point for the Zoom bot — one-shot script.
 Reads meeting details from environment variables, joins the meeting,
 records audio, uploads to GCS, enqueues transcription, then exits.
 
-Logging goes to both Cloud Logging and stdout (for serial console / docker logs).
+CRITICAL: All diagnostic output uses print(flush=True) to stdout.
+logger.info() is also used but Cloud Logging may swallow those.
+The print() calls are the ground truth for debugging via serial console.
 """
 
 import os
@@ -13,9 +15,12 @@ import logging
 import traceback
 
 # =============================================================================
-# STDOUT LOGGING — set up FIRST, before ANY other imports.
-# This ensures we see output even if subsequent imports crash.
+# STEP 1: STDOUT LOGGING — before ANY other imports
 # =============================================================================
+print("[zoom-bot] === Process starting ===", flush=True)
+print(f"[zoom-bot] Python {sys.version}", flush=True)
+print(f"[zoom-bot] PYTHONUNBUFFERED={os.environ.get('PYTHONUNBUFFERED', 'not set')}", flush=True)
+
 _stdout_handler = logging.StreamHandler(sys.stdout)
 _stdout_handler.setFormatter(logging.Formatter("%(asctime)s [zoom-bot] %(levelname)s %(message)s"))
 
@@ -26,108 +31,126 @@ logging.basicConfig(
     force=True,
 )
 logger = logging.getLogger("zoom-bot")
+logger.info("Logger initialized")
 
-# Immediately log that we're alive (print + logger for redundancy)
-print("[zoom-bot] Process started", flush=True)
-logger.info("zoom-bot main.py loaded, Python %s", sys.version)
-
-# Try to also send logs to Cloud Logging (non-fatal if it fails).
-# IMPORTANT: setup_logging() replaces root logger handlers, which kills stdout.
-# We must re-add our stdout handler AFTER Cloud Logging setup.
+# =============================================================================
+# STEP 2: Cloud Logging (non-fatal). Re-add stdout handler after setup.
+# =============================================================================
+print("[zoom-bot] Setting up Cloud Logging...", flush=True)
 try:
     import google.cloud.logging as gcl
     _logging_client = gcl.Client()
     _logging_client.setup_logging(log_level=logging.INFO)
-    # Re-add stdout handler — Cloud Logging's setup_logging() removes it
-    root_logger = logging.getLogger()
-    root_logger.addHandler(_stdout_handler)
+    # Cloud Logging's setup_logging() replaces all handlers — re-add stdout
+    logging.getLogger().addHandler(_stdout_handler)
     logger.addHandler(_stdout_handler)
-    logger.info("Cloud Logging initialized (stdout handler re-added)")
+    print("[zoom-bot] Cloud Logging OK (stdout handler re-added)", flush=True)
 except Exception as e:
-    logger.warning("Cloud Logging not available: %s", e)
+    print(f"[zoom-bot] Cloud Logging not available: {e}", flush=True)
 
-# Flush after setup to make sure the above lines are visible
 sys.stdout.flush()
-sys.stderr.flush()
 
 
 # =============================================================================
-# Early import validation — catch missing native libraries before main()
+# STEP 3: Validate critical imports one by one
 # =============================================================================
-print("[zoom-bot] Validating critical imports...", flush=True)
+print("[zoom-bot] --- Import validation ---", flush=True)
 
+print("[zoom-bot] Importing zoom_meeting_sdk...", flush=True)
 try:
     import zoom_meeting_sdk as zoom
-    print(f"[zoom-bot] zoom_meeting_sdk imported OK (version={getattr(zoom, '__version__', 'unknown')})", flush=True)
-    logger.info("zoom_meeting_sdk imported successfully")
+    print(f"[zoom-bot] zoom_meeting_sdk OK (version={getattr(zoom, '__version__', 'unknown')})", flush=True)
 except Exception as e:
-    print(f"[zoom-bot] FATAL: Failed to import zoom_meeting_sdk: {e}", flush=True)
-    logger.exception("Failed to import zoom_meeting_sdk")
+    print(f"[zoom-bot] FATAL: zoom_meeting_sdk import failed: {e}", flush=True)
     traceback.print_exc(file=sys.stdout)
     sys.stdout.flush()
     sys.exit(1)
 
+print("[zoom-bot] Importing GLib...", flush=True)
 try:
     import gi
     gi.require_version("GLib", "2.0")
     from gi.repository import GLib
-    print("[zoom-bot] GLib imported OK", flush=True)
-    logger.info("GLib imported successfully")
+    print("[zoom-bot] GLib OK", flush=True)
 except Exception as e:
-    print(f"[zoom-bot] FATAL: Failed to import GLib: {e}", flush=True)
-    logger.exception("Failed to import GLib")
+    print(f"[zoom-bot] FATAL: GLib import failed: {e}", flush=True)
     traceback.print_exc(file=sys.stdout)
     sys.stdout.flush()
     sys.exit(1)
 
+print("[zoom-bot] Importing jwt, requests, secretmanager...", flush=True)
 try:
     import jwt
     import requests
     from google.cloud import secretmanager
-    print("[zoom-bot] All Python dependencies imported OK", flush=True)
-    logger.info("All Python dependencies imported successfully")
+    print("[zoom-bot] jwt, requests, secretmanager OK", flush=True)
 except Exception as e:
-    print(f"[zoom-bot] FATAL: Failed to import dependencies: {e}", flush=True)
-    logger.exception("Failed to import dependencies")
+    print(f"[zoom-bot] FATAL: dependency import failed: {e}", flush=True)
     traceback.print_exc(file=sys.stdout)
     sys.stdout.flush()
     sys.exit(1)
 
+print("[zoom-bot] --- All imports OK ---", flush=True)
 sys.stdout.flush()
 
 
+# =============================================================================
+# STEP 4: main() — the actual bot logic
+# =============================================================================
 def main():
     """Main entry point — reads env vars, creates bot, runs it."""
+    print("[zoom-bot] === main() entered ===", flush=True)
+    logger.info("=== zoom-bot main() starting ===")
+
+    # --- Read env vars ---
+    print("[zoom-bot] Reading environment variables...", flush=True)
+    meeting_id = os.environ.get("BOT_MEETING_ID")
+    meeting_number_str = os.environ.get("BOT_MEETING_NUMBER")
+    passcode = os.environ.get("BOT_PASSCODE")
+    owning_user = os.environ.get("BOT_OWNING_USER")
+    display_name = os.environ.get("BOT_DISPLAY_NAME", "Leverege Notetaker")
+
+    print(f"[zoom-bot] BOT_MEETING_ID={meeting_id}", flush=True)
+    print(f"[zoom-bot] BOT_MEETING_NUMBER={meeting_number_str}", flush=True)
+    print(f"[zoom-bot] BOT_PASSCODE={'(set)' if passcode else '(NOT SET)'}", flush=True)
+    print(f"[zoom-bot] BOT_OWNING_USER={owning_user}", flush=True)
+    print(f"[zoom-bot] BOT_DISPLAY_NAME={display_name}", flush=True)
+    sys.stdout.flush()
+
+    if not meeting_id:
+        print("[zoom-bot] FATAL: BOT_MEETING_ID is not set", flush=True)
+        return 1
+    if not meeting_number_str:
+        print("[zoom-bot] FATAL: BOT_MEETING_NUMBER is not set", flush=True)
+        return 1
+    if not passcode:
+        print("[zoom-bot] FATAL: BOT_PASSCODE is not set", flush=True)
+        return 1
+    if not owning_user:
+        print("[zoom-bot] FATAL: BOT_OWNING_USER is not set", flush=True)
+        return 1
+
     try:
-        logger.info("=== zoom-bot main() starting ===")
-        print("[zoom-bot] main() starting", flush=True)
-
-        logger.info("Reading environment variables...")
-
-        meeting_id = os.environ.get("BOT_MEETING_ID")
-        meeting_number_str = os.environ.get("BOT_MEETING_NUMBER")
-        passcode = os.environ.get("BOT_PASSCODE")
-        owning_user = os.environ.get("BOT_OWNING_USER")
-        display_name = os.environ.get("BOT_DISPLAY_NAME", "Leverege Notetaker")
-
-        logger.info("ENV: BOT_MEETING_ID=%s BOT_MEETING_NUMBER=%s BOT_OWNING_USER=%s BOT_DISPLAY_NAME=%s",
-                     meeting_id, meeting_number_str, owning_user, display_name)
-        print(f"[zoom-bot] ENV: meeting_id={meeting_id} meeting_number={meeting_number_str} user={owning_user}", flush=True)
-
-        if not all([meeting_id, meeting_number_str, passcode, owning_user]):
-            logger.error("Missing required env vars: meeting_id=%s number=%s passcode=%s user=%s",
-                         bool(meeting_id), bool(meeting_number_str), bool(passcode), bool(owning_user))
-            print("[zoom-bot] FATAL: Missing required env vars", flush=True)
-            sys.exit(1)
-
         meeting_number = int(meeting_number_str)
+    except ValueError:
+        print(f"[zoom-bot] FATAL: BOT_MEETING_NUMBER is not a valid integer: {meeting_number_str}", flush=True)
+        return 1
 
-        logger.info("Importing ZoomMeetingBot...")
-        print("[zoom-bot] Importing ZoomMeetingBot...", flush=True)
+    print(f"[zoom-bot] All env vars OK. Meeting {meeting_number} for {owning_user}", flush=True)
+
+    # --- Import and create bot ---
+    print("[zoom-bot] Importing ZoomMeetingBot from src.bot...", flush=True)
+    try:
         from src.bot import ZoomMeetingBot
-        logger.info("ZoomMeetingBot imported successfully")
         print("[zoom-bot] ZoomMeetingBot imported OK", flush=True)
+    except Exception as e:
+        print(f"[zoom-bot] FATAL: Failed to import ZoomMeetingBot: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
+        return 1
 
+    print("[zoom-bot] Creating ZoomMeetingBot instance...", flush=True)
+    try:
         bot = ZoomMeetingBot(
             meeting_id=meeting_id,
             meeting_number=meeting_number,
@@ -135,32 +158,32 @@ def main():
             owning_user=owning_user,
             display_name=display_name,
         )
-        logger.info("Bot created, calling run()...")
-        print("[zoom-bot] Bot created, calling run()...", flush=True)
+        print("[zoom-bot] Bot instance created OK", flush=True)
+    except Exception as e:
+        print(f"[zoom-bot] FATAL: Failed to create bot: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
         sys.stdout.flush()
+        return 1
 
+    # --- Run the bot ---
+    print("[zoom-bot] Calling bot.run()...", flush=True)
+    sys.stdout.flush()
+    try:
         bot.run()
-
-        logger.info("zoom-bot exiting normally")
-        print("[zoom-bot] Exiting normally", flush=True)
-    except SystemExit:
-        raise
-    except Exception:
-        error_msg = traceback.format_exc()
-        logger.error("FATAL ERROR in main():\n%s", error_msg)
-        print(f"[zoom-bot] FATAL ERROR in main():\n{error_msg}", file=sys.stdout, flush=True)
-        print(error_msg, file=sys.stderr, flush=True)
+        print("[zoom-bot] bot.run() completed normally", flush=True)
+        return 0
+    except Exception as e:
+        print(f"[zoom-bot] FATAL: bot.run() crashed: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
         sys.stdout.flush()
-        sys.stderr.flush()
-        sys.exit(1)
+        return 1
 
 
+# =============================================================================
+# STEP 5: VM self-deletion
+# =============================================================================
 def _delete_own_vm():
-    """Delete this VM via the GCE metadata server + Compute API.
-
-    Called in a finally block so VMs don't accumulate after the bot exits.
-    Only runs on GCE (metadata server must be reachable).
-    """
+    """Delete this VM via the GCE metadata server + Compute API."""
     try:
         import requests as _req
         _meta_headers = {"Metadata-Flavor": "Google"}
@@ -171,26 +194,37 @@ def _delete_own_vm():
         zone = _req.get(f"{_meta_base}/instance/zone", headers=_meta_headers, timeout=5).text.split("/")[-1]
         project = _req.get(f"{_meta_base}/project/project-id", headers=_meta_headers, timeout=5).text
 
-        print(f"[zoom-bot] Requesting deletion of VM {name} in {zone}...", flush=True)
-        logger.info("Requesting deletion of VM %s in %s/%s", name, project, zone)
-
+        print(f"[zoom-bot] Deleting VM {name} in {project}/{zone}...", flush=True)
         from google.cloud import compute_v1
         compute_v1.InstancesClient().delete(project=project, zone=zone, instance=name)
-
-        print(f"[zoom-bot] VM {name} deletion requested successfully", flush=True)
-        logger.info("VM %s deletion requested successfully", name)
+        print(f"[zoom-bot] VM {name} deletion requested OK", flush=True)
     except Exception as e:
-        print(f"[zoom-bot] Failed to delete VM (may not be on GCE): {e}", flush=True)
-        logger.warning("Failed to delete VM: %s", e)
+        print(f"[zoom-bot] Failed to delete VM: {e}", flush=True)
 
 
+# =============================================================================
+# STEP 6: Entry point
+# =============================================================================
 if __name__ == "__main__":
+    _exit_code = 1
     try:
-        main()
+        print("[zoom-bot] === Entering __main__ ===", flush=True)
+        _exit_code = main()
+        if _exit_code is None:
+            _exit_code = 0
+        print(f"[zoom-bot] main() returned exit_code={_exit_code}", flush=True)
+    except SystemExit as e:
+        _exit_code = e.code if e.code is not None else 1
+        print(f"[zoom-bot] main() called sys.exit({_exit_code})", flush=True)
+    except Exception as e:
+        print(f"[zoom-bot] UNHANDLED EXCEPTION in __main__: {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        _exit_code = 1
     finally:
-        print("[zoom-bot] Entering finally block — cleaning up VM...", flush=True)
-        logger.info("zoom-bot shutting down, deleting VM")
+        print(f"[zoom-bot] === Shutting down (exit_code={_exit_code}) ===", flush=True)
+        sys.stdout.flush()
         _delete_own_vm()
         print("[zoom-bot] Goodbye.", flush=True)
         sys.stdout.flush()
         sys.stderr.flush()
+    sys.exit(_exit_code)
