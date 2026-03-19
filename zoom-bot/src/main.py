@@ -2,10 +2,11 @@
 Entry point for the Zoom bot — one-shot script.
 
 LOGGING STRATEGY:
-  - Every diagnostic line uses BOTH print(flush=True) AND logger.info()
-  - print() goes to stdout (serial console / docker logs)
-  - logger.info() goes to Cloud Logging (survives VM deletion)
-  - We need both because the VM self-deletes, destroying serial console
+  - log() writes to BOTH stdout AND Cloud Logging
+  - Cloud Logging uses write_log_entries() directly (not the handler)
+    because the handler batches/buffers and may not flush before VM deletion
+  - stdout goes to serial console (lost when VM deletes)
+  - Cloud Logging persists after VM deletion
 """
 
 import os
@@ -14,23 +15,10 @@ import logging
 import time
 import traceback
 
-
-def log(msg):
-    """Log to both stdout and Cloud Logging."""
-    print(f"[zoom-bot] {msg}", flush=True)
-    try:
-        logger.info(msg)
-    except Exception:
-        pass
-
-
 # =============================================================================
-# STEP 1: STDOUT + Cloud Logging setup
+# STEP 1: Basic stdout logging
 # =============================================================================
 print("[zoom-bot] === Process starting ===", flush=True)
-
-_stdout_handler = logging.StreamHandler(sys.stdout)
-_stdout_handler.setFormatter(logging.Formatter("%(asctime)s [zoom-bot] %(levelname)s %(message)s"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,65 +28,69 @@ logging.basicConfig(
 )
 logger = logging.getLogger("zoom-bot")
 
-log(f"Python {sys.version}")
-
+# =============================================================================
+# STEP 2: Cloud Logging — direct API client (not handler-based)
+# =============================================================================
+_cloud_logger = None
 try:
     import google.cloud.logging as gcl
     _logging_client = gcl.Client()
-    _logging_client.setup_logging(log_level=logging.INFO)
-    # Re-add stdout handler after Cloud Logging replaces handlers
-    logging.getLogger().addHandler(_stdout_handler)
-    logger.addHandler(_stdout_handler)
-    log("Cloud Logging initialized")
+    _cloud_logger = _logging_client.logger("zoom-bot")
+    print("[zoom-bot] Cloud Logging direct client initialized", flush=True)
 except Exception as e:
-    log(f"Cloud Logging not available: {e}")
+    print(f"[zoom-bot] Cloud Logging not available: {e}", flush=True)
+
+
+def log(msg):
+    """Log to both stdout and Cloud Logging (direct API, not handler)."""
+    print(f"[zoom-bot] {msg}", flush=True)
+    if _cloud_logger:
+        try:
+            _cloud_logger.log_text(f"[zoom-bot] {msg}", severity="INFO")
+        except Exception:
+            pass
 
 
 # =============================================================================
-# STEP 2: Validate critical imports
-# =============================================================================
-log("--- Import validation ---")
-
-log("Importing zoom_meeting_sdk...")
-try:
-    import zoom_meeting_sdk as zoom
-    log(f"zoom_meeting_sdk OK (version={getattr(zoom, '__version__', 'unknown')})")
-except Exception as e:
-    log(f"FATAL: zoom_meeting_sdk import failed: {e}")
-    logger.exception("zoom_meeting_sdk import failed")
-    sys.exit(1)
-
-log("Importing GLib...")
-try:
-    import gi
-    gi.require_version("GLib", "2.0")
-    from gi.repository import GLib
-    log("GLib OK")
-except Exception as e:
-    log(f"FATAL: GLib import failed: {e}")
-    logger.exception("GLib import failed")
-    sys.exit(1)
-
-log("Importing jwt, requests, secretmanager...")
-try:
-    import jwt
-    import requests
-    from google.cloud import secretmanager
-    log("jwt, requests, secretmanager OK")
-except Exception as e:
-    log(f"FATAL: dependency import failed: {e}")
-    logger.exception("dependency import failed")
-    sys.exit(1)
-
-log("--- All imports OK ---")
-
-
-# =============================================================================
-# STEP 3: main()
+# STEP 3: main() — ALL imports happen here, not at module level
 # =============================================================================
 def main():
-    """Main entry point — reads env vars, creates bot, runs it."""
+    """Main entry point — reads env vars, validates imports, creates bot, runs it."""
     log("=== main() entered ===")
+
+    # --- Validate imports one by one ---
+    log("Importing zoom_meeting_sdk...")
+    try:
+        import zoom_meeting_sdk as zoom
+        log(f"zoom_meeting_sdk OK (version={getattr(zoom, '__version__', 'unknown')})")
+    except Exception as e:
+        log(f"FATAL: zoom_meeting_sdk import failed: {e}")
+        log(traceback.format_exc())
+        return 1
+
+    log("Importing GLib...")
+    try:
+        import gi
+        gi.require_version("GLib", "2.0")
+        from gi.repository import GLib
+        log("GLib OK")
+    except Exception as e:
+        log(f"FATAL: GLib import failed: {e}")
+        log(traceback.format_exc())
+        return 1
+
+    log("Importing jwt, requests, secretmanager...")
+    try:
+        import jwt
+        import requests
+        from google.cloud import secretmanager
+        log("jwt, requests, secretmanager OK")
+    except Exception as e:
+        log(f"FATAL: dependency import failed: {e}")
+        log(traceback.format_exc())
+        return 1
+
+    log("--- All imports OK ---")
 
     # --- Read env vars ---
     log("Reading environment variables...")
@@ -142,7 +134,7 @@ def main():
         log("ZoomMeetingBot imported OK")
     except Exception as e:
         log(f"FATAL: ZoomMeetingBot import failed: {e}")
-        logger.exception("ZoomMeetingBot import failed")
+        log(traceback.format_exc())
         return 1
 
     log("Creating ZoomMeetingBot instance...")
@@ -157,7 +149,7 @@ def main():
         log("Bot instance created OK")
     except Exception as e:
         log(f"FATAL: Bot creation failed: {e}")
-        logger.exception("Bot creation failed")
+        log(traceback.format_exc())
         return 1
 
     # --- Run the bot ---
@@ -168,7 +160,7 @@ def main():
         return 0
     except Exception as e:
         log(f"FATAL: bot.run() crashed: {e}")
-        logger.exception("bot.run() crashed")
+        log(traceback.format_exc())
         return 1
 
 
@@ -201,6 +193,7 @@ def _delete_own_vm():
 if __name__ == "__main__":
     _exit_code = 1
     try:
+        log("=== Entering __main__ ===")
         _exit_code = main()
         if _exit_code is None:
             _exit_code = 0
@@ -210,14 +203,13 @@ if __name__ == "__main__":
         log(f"main() called sys.exit({_exit_code})")
     except Exception as e:
         log(f"UNHANDLED EXCEPTION: {e}")
-        logger.exception("Unhandled exception in __main__")
+        log(traceback.format_exc())
         _exit_code = 1
     finally:
         log(f"=== Shutting down (exit_code={_exit_code}) ===")
-        # Give Cloud Logging 2 seconds to flush before deleting the VM
         sys.stdout.flush()
         sys.stderr.flush()
-        time.sleep(2)
+        time.sleep(3)
         _delete_own_vm()
         log("Goodbye.")
         sys.stdout.flush()
