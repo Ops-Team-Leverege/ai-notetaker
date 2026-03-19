@@ -37,13 +37,15 @@ WORKER_URL = os.environ.get("TRANSCRIPTION_WORKER_URL", "")
 
 
 def generate_sdk_jwt(client_id: str, client_secret: str) -> str:
-    iat = datetime.utcnow()
-    exp = iat + timedelta(hours=24)
+    import time as _time
+    iat = int(_time.time()) - 30  # 30s in the past for clock skew
+    exp = iat + 60 * 60 * 2       # 2 hours (Zoom recommended)
     payload = {
+        "appKey": client_id,
+        "sdkKey": client_id,
         "iat": iat,
         "exp": exp,
-        "appKey": client_id,
-        "tokenExp": int(exp.timestamp()),
+        "tokenExp": exp,
     }
     return jwt.encode(payload, client_secret, algorithm="HS256")
 
@@ -204,7 +206,14 @@ class ZoomMeetingBot:
         # --- Fetch credentials ---
         log("Fetching SDK credentials from Secret Manager...")
         sdk_creds = fetch_sdk_credentials()
-        log(f"SDK credentials OK (client_id={sdk_creds.get('client_id', '?')[:8]}...)")
+        log(f"SDK credentials OK (client_id={sdk_creds.get('client_id', '?')[:8]}... secret_len={len(sdk_creds.get('client_secret', ''))})")
+        # Validate no whitespace/encoding issues
+        cid = sdk_creds.get("client_id", "")
+        csec = sdk_creds.get("client_secret", "")
+        if cid != cid.strip() or csec != csec.strip():
+            log("WARNING: SDK credentials have leading/trailing whitespace — stripping")
+            sdk_creds["client_id"] = cid.strip()
+            sdk_creds["client_secret"] = csec.strip()
 
         log("Fetching S2S OAuth credentials from Secret Manager...")
         s2s_creds = fetch_s2s_credentials()
@@ -342,13 +351,17 @@ class ZoomMeetingBot:
         # Generate JWT and authenticate
         jwt_token = generate_sdk_jwt(creds["client_id"], creds["client_secret"])
         log(f"_init_sdk: JWT generated (length={len(jwt_token)})")
+        log(f"_init_sdk: JWT first 50 chars: {jwt_token[:50]}...")
 
         # Decode and log JWT payload for debugging (without verifying signature)
         try:
             decoded = jwt.decode(jwt_token, creds["client_secret"], algorithms=["HS256"])
-            log(f"_init_sdk: JWT payload appKey={decoded.get('appKey', '?')[:8]}... tokenExp={decoded.get('tokenExp')} iat={decoded.get('iat')} exp={decoded.get('exp')}")
+            log(f"_init_sdk: JWT payload appKey={decoded.get('appKey', '?')[:8]}... sdkKey={decoded.get('sdkKey', 'MISSING')[:8]}... iat={decoded.get('iat')} exp={decoded.get('exp')} tokenExp={decoded.get('tokenExp')}")
         except Exception as e:
             log(f"_init_sdk: JWT decode for debug failed: {e}")
+
+        # Log credential lengths for sanity check
+        log(f"_init_sdk: client_id length={len(creds['client_id'])} client_secret length={len(creds['client_secret'])}")
 
         auth_context = zoom.AuthContext()
         auth_context.jwt_token = jwt_token
