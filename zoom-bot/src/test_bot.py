@@ -152,9 +152,11 @@ class TestGetS2sAccessToken:
 
 
 class TestFetchZakToken:
+    @patch("src.bot.log")
     @patch("src.bot.requests.get")
-    def test_returns_zak_token(self, mock_get):
+    def test_returns_zak_token(self, mock_get, mock_log):
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.json.return_value = {"token": "zak-token-abc"}
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
@@ -166,9 +168,26 @@ class TestFetchZakToken:
         assert "users/me/token" in call_args[0][0]
         assert call_args[1]["headers"]["Authorization"] == "Bearer s2s-access-token"
 
+    @patch("src.bot.log")
     @patch("src.bot.requests.get")
-    def test_raises_on_http_error(self, mock_get):
+    def test_uses_custom_user_id(self, mock_get, mock_log):
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"token": "zak-token-xyz"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        token = fetch_zak_token("token", "bot@example.com")
+        assert token == "zak-token-xyz"
+        call_args = mock_get.call_args
+        assert "users/bot@example.com/token" in call_args[0][0]
+
+    @patch("src.bot.log")
+    @patch("src.bot.requests.get")
+    def test_raises_on_http_error(self, mock_get, mock_log):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_resp.text = "Forbidden"
         mock_resp.raise_for_status.side_effect = Exception("403 Forbidden")
         mock_get.return_value = mock_resp
 

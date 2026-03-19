@@ -113,13 +113,17 @@ def get_s2s_access_token(creds: dict) -> str:
     return resp.json()["access_token"]
 
 
-def fetch_zak_token(access_token: str) -> str:
+def fetch_zak_token(access_token: str, bot_user_id: str = "me") -> str:
+    url = f"https://api.zoom.us/v2/users/{bot_user_id}/token"
+    log(f"Fetching ZAK from {url}")
     resp = requests.get(
-        "https://api.zoom.us/v2/users/me/token",
+        url,
         params={"type": "zak"},
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=15,
     )
+    if resp.status_code != 200:
+        log(f"ZAK fetch failed: status={resp.status_code} body={resp.text[:500]}")
     resp.raise_for_status()
     return resp.json()["token"]
 
@@ -210,8 +214,10 @@ class ZoomMeetingBot:
         access_token = get_s2s_access_token(s2s_creds)
         log(f"S2S access token OK (length={len(access_token)})")
 
-        log("Fetching ZAK token from Zoom API...")
-        self._zak_token = fetch_zak_token(access_token)
+        # Use bot_user_id from credentials if available, otherwise "me"
+        bot_user_id = s2s_creds.get("bot_user_id", "me")
+        log(f"Fetching ZAK token from Zoom API (user={bot_user_id})...")
+        self._zak_token = fetch_zak_token(access_token, bot_user_id)
         log(f"ZAK token OK (length={len(self._zak_token)}, first10={self._zak_token[:10]}...)")
 
         # --- Verify container environment ---
