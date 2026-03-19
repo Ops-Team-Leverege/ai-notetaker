@@ -90,9 +90,11 @@ class TestPcmToWav:
 
 
 class TestGetS2sAccessToken:
+    @patch("src.bot.log")
     @patch("src.bot.requests.post")
-    def test_returns_access_token(self, mock_post):
+    def test_returns_access_token_with_account_id(self, mock_post, mock_log):
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.json.return_value = {"access_token": "s2s-token-123", "token_type": "bearer", "expires_in": 3600}
         mock_resp.raise_for_status = MagicMock()
         mock_post.return_value = mock_resp
@@ -103,10 +105,44 @@ class TestGetS2sAccessToken:
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args
         assert "zoom.us/oauth/token" in call_kwargs[0][0]
+        assert call_kwargs[1]["data"]["grant_type"] == "account_credentials"
 
+    @patch("src.bot.log")
     @patch("src.bot.requests.post")
-    def test_raises_on_http_error(self, mock_post):
+    def test_returns_access_token_without_account_id(self, mock_post, mock_log):
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"access_token": "cc-token-456", "token_type": "bearer", "expires_in": 3600}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        creds = {"client_id": "cid", "client_secret": "csec"}
+        token = get_s2s_access_token(creds)
+        assert token == "cc-token-456"
+        call_kwargs = mock_post.call_args
+        assert call_kwargs[1]["data"]["grant_type"] == "client_credentials"
+
+    @patch("src.bot.log")
+    @patch("src.bot.requests.post")
+    def test_fallback_to_client_credentials_on_400(self, mock_post, mock_log):
+        fail_resp = MagicMock()
+        fail_resp.status_code = 400
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.json.return_value = {"access_token": "fallback-token"}
+        ok_resp.raise_for_status = MagicMock()
+        mock_post.side_effect = [fail_resp, ok_resp]
+
+        creds = {"account_id": "acc-1", "client_id": "cid", "client_secret": "csec"}
+        token = get_s2s_access_token(creds)
+        assert token == "fallback-token"
+        assert mock_post.call_count == 2
+
+    @patch("src.bot.log")
+    @patch("src.bot.requests.post")
+    def test_raises_on_http_error(self, mock_post, mock_log):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
         mock_resp.raise_for_status.side_effect = Exception("401 Unauthorized")
         mock_post.return_value = mock_resp
 

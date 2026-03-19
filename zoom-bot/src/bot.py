@@ -80,16 +80,35 @@ def fetch_s2s_credentials() -> dict:
 
 def get_s2s_access_token(creds: dict) -> str:
     basic_auth = (creds["client_id"], creds["client_secret"])
+    # Try account_credentials first (S2S OAuth app), fall back to client_credentials (General App)
+    account_id = creds.get("account_id")
+    if account_id:
+        data = {
+            "grant_type": "account_credentials",
+            "account_id": account_id,
+        }
+    else:
+        data = {
+            "grant_type": "client_credentials",
+        }
+    log(f"Requesting access token with grant_type={data['grant_type']}")
     resp = requests.post(
         "https://zoom.us/oauth/token",
         auth=basic_auth,
-        data={
-            "grant_type": "account_credentials",
-            "account_id": creds["account_id"],
-        },
+        data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
     )
+    # If account_credentials fails, retry with client_credentials
+    if resp.status_code == 400 and account_id:
+        log("account_credentials grant failed (400), retrying with client_credentials...")
+        resp = requests.post(
+            "https://zoom.us/oauth/token",
+            auth=basic_auth,
+            data={"grant_type": "client_credentials"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
     resp.raise_for_status()
     return resp.json()["access_token"]
 
@@ -185,9 +204,9 @@ class ZoomMeetingBot:
 
         log("Fetching S2S OAuth credentials from Secret Manager...")
         s2s_creds = fetch_s2s_credentials()
-        log(f"S2S credentials OK (account_id={s2s_creds.get('account_id', '?')[:8]}...)")
+        log(f"S2S credentials OK (client_id={s2s_creds.get('client_id', '?')[:8]}...)")
 
-        log("Getting S2S access token from Zoom...")
+        log("Getting access token from Zoom...")
         access_token = get_s2s_access_token(s2s_creds)
         log(f"S2S access token OK (length={len(access_token)})")
 
