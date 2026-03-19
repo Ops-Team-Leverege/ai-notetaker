@@ -167,6 +167,8 @@ class ZoomMeetingBot:
 
         self._main_loop = None
         self._shutdown_requested = False
+        self._auth_received = False
+        self._joined_meeting = False
 
     def run(self) -> None:
         """Main entry point — blocks until meeting ends."""
@@ -205,6 +207,24 @@ class ZoomMeetingBot:
         # Run GLib main loop — this BLOCKS until meeting ends or shutdown requested
         self._main_loop = GLib.MainLoop()
         GLib.timeout_add(100, self._check_shutdown)
+
+        # Auth timeout — if callback doesn't fire within 30s, something is wrong
+        def _auth_timeout():
+            if not self._auth_received:
+                log("TIMEOUT: Auth callback never fired after 30 seconds")
+                log("This usually means the SDK credentials are wrong (OAuth creds vs SDK creds) or the environment is missing dbus/PulseAudio")
+                self._request_shutdown()
+            return False  # don't repeat
+        GLib.timeout_add_seconds(30, _auth_timeout)
+
+        # Meeting join timeout — if not in meeting within 60s of auth, exit
+        def _join_timeout():
+            if self._auth_received and not self._joined_meeting:
+                log("TIMEOUT: Meeting join never completed after 60 seconds")
+                log("Auth succeeded but meeting join callback never fired — check meeting number/passcode/ZAK token")
+                self._request_shutdown()
+            return False
+        GLib.timeout_add_seconds(90, _join_timeout)  # 90s total = ~30s auth + 60s join
 
         log(">>> GLib.MainLoop().run() — BLOCKING until meeting ends <<<")
         try:
@@ -258,6 +278,13 @@ class ZoomMeetingBot:
         jwt_token = generate_sdk_jwt(creds["client_id"], creds["client_secret"])
         log(f"_init_sdk: JWT generated (length={len(jwt_token)})")
 
+        # Decode and log JWT payload for debugging (without verifying signature)
+        try:
+            decoded = jwt.decode(jwt_token, creds["client_secret"], algorithms=["HS256"])
+            log(f"_init_sdk: JWT payload appKey={decoded.get('appKey', '?')[:8]}... tokenExp={decoded.get('tokenExp')} iat={decoded.get('iat')} exp={decoded.get('exp')}")
+        except Exception as e:
+            log(f"_init_sdk: JWT decode for debug failed: {e}")
+
         auth_context = zoom.AuthContext()
         auth_context.jwt_token = jwt_token
 
@@ -272,12 +299,25 @@ class ZoomMeetingBot:
     def _on_auth_return(self, result) -> None:
         """Called when SDK authentication completes (async callback)."""
         import zoom_meeting_sdk as zoom
+        self._auth_received = True
         log(f"AUTH CALLBACK: result={result} (SUCCESS={zoom.AUTHRET_SUCCESS})")
+
+        # Log known auth result codes for debugging
+        auth_codes = {
+            getattr(zoom, 'AUTHRET_SUCCESS', None): 'SUCCESS',
+            getattr(zoom, 'AUTHRET_JWTTOKENWRONG', None): 'JWT_TOKEN_WRONG',
+            getattr(zoom, 'AUTHRET_UNKNOWN', None): 'UNKNOWN',
+        }
+        code_name = auth_codes.get(result, f'UNRECOGNIZED({result})')
+        log(f"AUTH CALLBACK: {code_name}")
+
         if result == zoom.AUTHRET_SUCCESS:
             log("Auth succeeded, calling _join_meeting()...")
             self._join_meeting()
         else:
-            log(f"AUTH FAILED: {result}")
+            log(f"AUTH FAILED: {code_name} (code={result})")
+            log("If AUTHRET_JWTTOKENWRONG: check that zoom-sdk-credentials contains the General App's Client ID + Client Secret, NOT the S2S OAuth creds")
+            log("If AUTHRET_UNKNOWN: check dbus, PulseAudio, and zoomus.conf are set up correctly in the container")
             self._request_shutdown()
 
     def _join_meeting(self) -> None:
@@ -317,6 +357,7 @@ class ZoomMeetingBot:
 
         if status == zoom.MEETING_STATUS_INMEETING:
             log("STATUS: IN MEETING — setting up audio recording")
+            self._joined_meeting = True
             self._on_joined()
         elif status == zoom.MEETING_STATUS_ENDED:
             log("STATUS: MEETING ENDED")

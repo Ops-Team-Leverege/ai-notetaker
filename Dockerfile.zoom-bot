@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && apt-get install -y \
     libasound2 libasound2-plugins alsa-utils alsa-oss \
     pulseaudio pulseaudio-utils \
+    dbus dbus-x11 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -47,6 +48,14 @@ RUN apt-get update && apt-get install -y \
 RUN adduser root pulse-access && adduser root audio
 RUN mkdir -p /root/.config/pulse
 COPY zoom-bot/pulse-default.pa /root/.config/pulse/default.pa
+
+# dbus setup — required for Zoom SDK auth callback to fire
+RUN mkdir -p /var/run/dbus && \
+    dbus-uuidgen > /var/lib/dbus/machine-id
+
+# Zoom SDK config — tells SDK to use default audio system
+RUN mkdir -p /root/.config && \
+    echo -e "[General]\nsystem.audio.type=default" > /root/.config/zoomus.conf
 
 # Python dependencies
 WORKDIR /app
@@ -58,8 +67,13 @@ COPY zoom-bot/ .
 
 ENV PYTHONUNBUFFERED=1
 
-# Start PulseAudio in background, then run the bot directly (one-shot script)
+# Start dbus + PulseAudio in background, then run the bot directly (one-shot script)
+# dbus is required for the Zoom SDK auth callback to fire in headless environments
 # The bot reads BOT_MEETING_ID, BOT_MEETING_NUMBER, BOT_PASSCODE, BOT_OWNING_USER
 # from environment variables, joins the meeting, records, uploads, and exits.
-CMD pulseaudio --start --exit-idle-time=-1 && \
+CMD dbus-daemon --system --fork 2>/dev/null || true && \
+    pulseaudio --start --exit-idle-time=-1 && \
+    pactl load-module module-null-sink sink_name=SpeakerOutput 2>/dev/null && \
+    pactl set-default-sink SpeakerOutput 2>/dev/null && \
+    pactl set-default-source SpeakerOutput.monitor 2>/dev/null && \
     python3 -m src.main
