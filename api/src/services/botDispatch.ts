@@ -14,7 +14,7 @@ import { Platform } from '../types';
 
 const PROJECT_ID = process.env.GCP_PROJECT_ID || 'ai-meeting-notetaker-490206';
 const REGION = process.env.GCP_REGION || 'us-central1';
-const ZONE = process.env.GCP_ZONE || 'us-central1-a';
+const ZONES = (process.env.GCP_ZONES || 'us-central1-a,us-central1-b,us-central1-c,us-central1-f').split(',');
 const API_URL = process.env.API_URL || '';
 const AUDIO_BUCKET = process.env.AUDIO_BUCKET || 'leverege-notetaker-audio';
 const TRANSCRIPTION_QUEUE = process.env.TRANSCRIPTION_QUEUE || 'transcription-queue';
@@ -89,71 +89,94 @@ ${envString}
   restartPolicy: Never
 `;
 
-    const [operation] = await client.insert({
-        project: PROJECT_ID,
-        zone: ZONE,
-        instanceResource: {
-            name: vmName,
-            machineType: `zones/${ZONE}/machineTypes/e2-standard-2`,
-            scheduling: {
-                preemptible: true,
-                automaticRestart: false,
-            },
-            disks: [
-                {
-                    boot: true,
-                    autoDelete: true,
-                    initializeParams: {
-                        sourceImage:
-                            'projects/cos-cloud/global/images/family/cos-stable',
-                        diskSizeGb: '30',
+    // Try each zone until one succeeds (handles ZONE_RESOURCE_POOL_EXHAUSTED)
+    let lastError: Error | null = null;
+    for (const zone of ZONES) {
+        try {
+            console.log(`[botDispatch] Trying zone ${zone} for VM ${vmName}...`);
+            const [operation] = await client.insert({
+                project: PROJECT_ID,
+                zone,
+                instanceResource: {
+                    name: vmName,
+                    machineType: `zones/${zone}/machineTypes/e2-standard-2`,
+                    scheduling: {
+                        preemptible: true,
+                        automaticRestart: false,
+                    },
+                    disks: [
+                        {
+                            boot: true,
+                            autoDelete: true,
+                            initializeParams: {
+                                sourceImage:
+                                    'projects/cos-cloud/global/images/family/cos-stable',
+                                diskSizeGb: '30',
+                            },
+                        },
+                    ],
+                    networkInterfaces: [
+                        {
+                            network: `projects/${PROJECT_ID}/global/networks/default`,
+                            accessConfigs: [{ name: 'External NAT', type: 'ONE_TO_ONE_NAT' }],
+                        },
+                    ],
+                    serviceAccounts: [
+                        {
+                            email: 'default',
+                            scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+                        },
+                    ],
+                    metadata: {
+                        items: [
+                            {
+                                key: 'gce-container-declaration',
+                                value: containerSpec,
+                            },
+                            {
+                                key: 'google-logging-enabled',
+                                value: 'true',
+                            },
+                        ],
+                    },
+                    labels: {
+                        purpose: 'meeting-bot',
                     },
                 },
-            ],
-            networkInterfaces: [
-                {
-                    network: `projects/${PROJECT_ID}/global/networks/default`,
-                    accessConfigs: [{ name: 'External NAT', type: 'ONE_TO_ONE_NAT' }],
-                },
-            ],
-            serviceAccounts: [
-                {
-                    email: 'default',
-                    scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-                },
-            ],
-            metadata: {
-                items: [
-                    {
-                        key: 'gce-container-declaration',
-                        value: containerSpec,
-                    },
-                    {
-                        key: 'google-logging-enabled',
-                        value: 'true',
-                    },
-                ],
-            },
-            labels: {
-                purpose: 'meeting-bot',
-            },
-        },
-    });
+            });
 
-    // Log the operation result — the LROperation metadata contains the GCE operation details
-    const opMeta = operation.metadata as Record<string, any> | undefined;
-    console.log(`[botDispatch] VM insert operation: name=${operation.name} metadata=${JSON.stringify({
-        status: opMeta?.status,
-        targetLink: opMeta?.targetLink,
-        error: opMeta?.error,
-    })}`);
-    if (opMeta?.error) {
-        const errors = opMeta.error.errors?.map((e: any) => e.message || e.code).join(', ') || 'unknown';
-        throw new Error(`VM creation operation failed: ${errors}`);
+            // Wait for the operation to complete to catch stockout errors
+            try {
+                const operationsClient = client.zoneOperationsClient;
+                await operationsClient.wait({
+                    project: PROJECT_ID,
+                    zone,
+                    operation: operation.name as string,
+                });
+            } catch (waitErr: any) {
+                const msg = waitErr.message || '';
+                if (msg.includes('ZONE_RESOURCE_POOL_EXHAUSTED') || msg.includes('stockout') || msg.includes('does not have enough resources')) {
+                    console.log(`[botDispatch] Zone ${zone} exhausted, trying next...`);
+                    lastError = new Error(`Zone ${zone} exhausted: ${msg}`);
+                    continue;
+                }
+                throw waitErr;
+            }
+
+            console.log(`[botDispatch] VM ${vmName} created in ${zone} (operation=${operation.name})`);
+            return vmName;
+        } catch (err: any) {
+            const msg = err.message || '';
+            if (msg.includes('ZONE_RESOURCE_POOL_EXHAUSTED') || msg.includes('stockout') || msg.includes('does not have enough resources')) {
+                console.log(`[botDispatch] Zone ${zone} exhausted, trying next...`);
+                lastError = err;
+                continue;
+            }
+            throw err;
+        }
     }
 
-    console.log(`[botDispatch] VM ${vmName} insert accepted (operation=${operation.name})`);
-    return vmName;
+    throw lastError || new Error(`All zones exhausted: ${ZONES.join(', ')}`);
 }
 
 interface DispatchOptions {
