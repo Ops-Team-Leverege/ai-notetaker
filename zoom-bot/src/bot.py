@@ -195,6 +195,9 @@ class ZoomMeetingBot:
         self._zak_token = fetch_zak_token(access_token)
         log(f"ZAK token OK (length={len(self._zak_token)}, first10={self._zak_token[:10]}...)")
 
+        # --- Verify container environment ---
+        self._check_environment()
+
         # --- Initialize SDK ---
         log("Initializing Zoom Meeting SDK...")
         self._init_sdk(sdk_creds)
@@ -235,6 +238,43 @@ class ZoomMeetingBot:
         finally:
             log("GLib main loop exited, finalizing...")
             self._finalize()
+
+    def _check_environment(self) -> None:
+        """Check that dbus and PulseAudio are running inside the container."""
+        import subprocess
+
+        log("Checking container environment...")
+
+        # Check dbus
+        try:
+            result = subprocess.run(["pgrep", "dbus-daemon"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                log(f"dbus-daemon is running (PID: {result.stdout.strip()})")
+            else:
+                log("WARNING: dbus-daemon is NOT running — SDK auth callback may not fire")
+        except Exception as e:
+            log(f"WARNING: Could not check dbus-daemon: {e}")
+
+        # Check PulseAudio
+        try:
+            result = subprocess.run(["pactl", "info"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.splitlines()[:5]:
+                    log(f"  PulseAudio: {line.strip()}")
+            else:
+                log(f"WARNING: pactl info failed (rc={result.returncode}): {result.stderr.strip()}")
+        except Exception as e:
+            log(f"WARNING: Could not check PulseAudio: {e}")
+
+        # Check zoomus.conf
+        try:
+            with open("/root/.config/zoomus.conf", "r") as f:
+                content = f.read().strip()
+                log(f"zoomus.conf: {content}")
+        except Exception as e:
+            log(f"WARNING: Could not read zoomus.conf: {e}")
+
+        log("Environment check complete")
 
     def _init_sdk(self, creds: dict) -> None:
         """Initialize the Zoom Meeting SDK, authenticate, and join."""
