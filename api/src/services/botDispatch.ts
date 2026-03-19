@@ -147,8 +147,9 @@ ${envString}
 
             // Wait for the operation to complete to catch stockout errors
             try {
-                const operationsClient = client.zoneOperationsClient;
-                await operationsClient.wait({
+                const { ZoneOperationsClient } = await import('@google-cloud/compute');
+                const opsClient = new ZoneOperationsClient();
+                await opsClient.wait({
                     project: PROJECT_ID,
                     zone,
                     operation: operation.name as string,
