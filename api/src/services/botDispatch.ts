@@ -140,15 +140,16 @@ ${envString}
         },
     });
 
-    // Log the operation status — helps debug silent VM creation failures
-    console.log(`[botDispatch] VM insert operation: name=${operation.name} status=${operation.status}`);
-    if (operation.error) {
-        const errors = operation.error.errors?.map((e: any) => e.message || e.code).join(', ');
+    // Log the operation result — the LROperation metadata contains the GCE operation details
+    const opMeta = operation.metadata as Record<string, any> | undefined;
+    console.log(`[botDispatch] VM insert operation: name=${operation.name} metadata=${JSON.stringify({
+        status: opMeta?.status,
+        targetLink: opMeta?.targetLink,
+        error: opMeta?.error,
+    })}`);
+    if (opMeta?.error) {
+        const errors = opMeta.error.errors?.map((e: any) => e.message || e.code).join(', ') || 'unknown';
         throw new Error(`VM creation operation failed: ${errors}`);
-    }
-    if (operation.warnings && operation.warnings.length > 0) {
-        const warns = operation.warnings.map((w: any) => w.message || w.code).join(', ');
-        console.warn(`[botDispatch] VM creation warnings: ${warns}`);
     }
 
     console.log(`[botDispatch] VM ${vmName} insert accepted (operation=${operation.name})`);
