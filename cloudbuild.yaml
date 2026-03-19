@@ -195,25 +195,9 @@ steps:
       - --cpu=1
     waitFor: [push-web-ui]
 
-  - id: deploy-zoom-bot
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - zoom-bot
-      - --image=${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/zoom-bot:$COMMIT_SHA
-      - --region=${_REGION}
-      - --platform=managed
-      - --service-account=${_SA_NOTETAKER_BOT}
-      - --set-secrets=DATABASE_URL=cloud-sql-connection-string:latest
-      - --no-allow-unauthenticated
-      - --min-instances=0
-      - --max-instances=5
-      - --memory=2Gi
-      - --cpu=2
-      - --timeout=3600
-    waitFor: [push-zoom-bot]
+  # NOTE: zoom-bot is NOT deployed to Cloud Run.
+  # It runs as a one-shot container on Compute Engine VMs, pulled from Artifact Registry.
+  # The build-zoom-bot + push-zoom-bot steps above are sufficient.
 
 images:
   - ${_REGION}-docker.pkg.dev/${_PROJECT}/notetaker/api:$COMMIT_SHA
