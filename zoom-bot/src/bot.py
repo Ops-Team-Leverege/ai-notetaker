@@ -27,6 +27,7 @@ import json
 import logging
 import signal
 import time
+import traceback
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -221,47 +222,63 @@ class ZoomMeetingBot:
         gi.require_version("GLib", "2.0")
         from gi.repository import GLib
 
+        print(f"[zoom-bot] Bot.run() starting for meeting {self.meeting_number}", flush=True)
         logger.info("Bot.run() starting for meeting_id=%s meeting_number=%d user=%s",
                      self.meeting_id, self.meeting_number, self.owning_user)
 
         # Fetch credentials from two separate secrets
         try:
+            print("[zoom-bot] Fetching SDK credentials from Secret Manager...", flush=True)
             logger.info("Fetching SDK credentials from zoom-sdk-credentials...")
             sdk_creds = fetch_sdk_credentials()
+            print(f"[zoom-bot] SDK credentials fetched (client_id={sdk_creds.get('client_id', '?')[:8]}...)", flush=True)
             logger.info("SDK credentials fetched (client_id=%s...)", sdk_creds.get("client_id", "?")[:8])
         except Exception:
+            print(f"[zoom-bot] FAILED to fetch SDK credentials: {traceback.format_exc()}", flush=True)
             logger.exception("Failed to fetch SDK credentials")
             raise
 
         try:
+            print("[zoom-bot] Fetching S2S OAuth credentials from Secret Manager...", flush=True)
             logger.info("Fetching S2S OAuth credentials from zoom-account-credentials...")
             s2s_creds = fetch_s2s_credentials()
+            print(f"[zoom-bot] S2S credentials fetched (account_id={s2s_creds.get('account_id', '?')[:8]}...)", flush=True)
             logger.info("S2S credentials fetched (account_id=%s...)", s2s_creds.get("account_id", "?")[:8])
         except Exception:
+            print(f"[zoom-bot] FAILED to fetch S2S credentials: {traceback.format_exc()}", flush=True)
             logger.exception("Failed to fetch S2S credentials")
             raise
 
         try:
+            print("[zoom-bot] Getting S2S access token from Zoom...", flush=True)
             logger.info("Getting S2S access token...")
             access_token = get_s2s_access_token(s2s_creds)
+            print(f"[zoom-bot] S2S access token obtained (length={len(access_token)})", flush=True)
             logger.info("S2S access token obtained (length=%d)", len(access_token))
         except Exception:
+            print(f"[zoom-bot] FAILED to get S2S access token: {traceback.format_exc()}", flush=True)
             logger.exception("Failed to get S2S access token")
             raise
 
         try:
+            print("[zoom-bot] Fetching ZAK token from Zoom API...", flush=True)
             logger.info("Fetching ZAK token...")
             self._zak_token = fetch_zak_token(access_token)
+            print(f"[zoom-bot] ZAK token fetched (length={len(self._zak_token)})", flush=True)
             logger.info("ZAK token fetched (length=%d)", len(self._zak_token))
         except Exception:
+            print(f"[zoom-bot] FAILED to fetch ZAK token: {traceback.format_exc()}", flush=True)
             logger.exception("Failed to fetch ZAK token")
             raise
 
         try:
+            print("[zoom-bot] Initializing Zoom Meeting SDK...", flush=True)
             logger.info("Initializing Zoom Meeting SDK...")
             self._init_sdk(sdk_creds)
+            print("[zoom-bot] SDK initialized successfully", flush=True)
             logger.info("SDK initialized successfully")
         except Exception:
+            print(f"[zoom-bot] FAILED to initialize SDK: {traceback.format_exc()}", flush=True)
             logger.exception("Failed to initialize SDK")
             raise
 
@@ -274,9 +291,11 @@ class ZoomMeetingBot:
         GLib.timeout_add(100, self._check_shutdown)
 
         try:
+            print("[zoom-bot] Starting GLib main loop (blocking until meeting ends)...", flush=True)
             logger.info("Starting GLib main loop")
             self._main_loop.run()
         except Exception as e:
+            print(f"[zoom-bot] Main loop error: {e}", flush=True)
             logger.error("Main loop error: %s", e)
         finally:
             self._finalize()
@@ -285,6 +304,7 @@ class ZoomMeetingBot:
         """Initialize the Zoom Meeting SDK, authenticate, and join."""
         import zoom_meeting_sdk as zoom
 
+        print("[zoom-bot] _init_sdk: creating InitParam...", flush=True)
         init_param = zoom.InitParam()
         init_param.strWebDomain = "https://zoom.us"
         init_param.strSupportUrl = "https://zoom.us"
@@ -292,16 +312,20 @@ class ZoomMeetingBot:
         init_param.emLanguageID = zoom.SDK_LANGUAGE_ID.LANGUAGE_English
         init_param.enableLogByDefault = True
 
+        print("[zoom-bot] _init_sdk: calling zoom.InitSDK()...", flush=True)
         logger.info("Calling zoom.InitSDK()...")
         result = zoom.InitSDK(init_param)
+        print(f"[zoom-bot] _init_sdk: InitSDK returned {result}", flush=True)
         if result != zoom.SDKERR_SUCCESS:
             raise RuntimeError(f"InitSDK failed: {result}")
         logger.info("InitSDK succeeded")
 
         # Create services
+        print("[zoom-bot] _init_sdk: creating SDK services...", flush=True)
         self._meeting_service = zoom.CreateMeetingService()
         self._setting_service = zoom.CreateSettingService()
         self._auth_service = zoom.CreateAuthService()
+        print("[zoom-bot] _init_sdk: SDK services created", flush=True)
         logger.info("SDK services created")
 
         # Set meeting event callback
@@ -320,10 +344,13 @@ class ZoomMeetingBot:
         auth_context.jwt_token = generate_sdk_jwt(
             creds["client_id"], creds["client_secret"]
         )
+        print(f"[zoom-bot] _init_sdk: calling SDKAuth (client_id={creds['client_id'][:8]}...)...", flush=True)
         logger.info("Calling SDKAuth with JWT (client_id=%s...)...", creds["client_id"][:8])
         auth_result = self._auth_service.SDKAuth(auth_context)
+        print(f"[zoom-bot] _init_sdk: SDKAuth returned {auth_result}", flush=True)
         if auth_result != zoom.SDKERR_SUCCESS:
             raise RuntimeError(f"SDKAuth failed: {auth_result}")
+        print("[zoom-bot] _init_sdk: SDKAuth success, waiting for auth callback...", flush=True)
         logger.info("SDKAuth call returned success, waiting for auth callback...")
 
     def _on_auth_return(self, result) -> None:
