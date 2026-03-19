@@ -67,13 +67,21 @@ COPY zoom-bot/ .
 
 ENV PYTHONUNBUFFERED=1
 
-# Start dbus + PulseAudio in background, then run the bot directly (one-shot script)
-# dbus is required for the Zoom SDK auth callback to fire in headless environments
-# The bot reads BOT_MEETING_ID, BOT_MEETING_NUMBER, BOT_PASSCODE, BOT_OWNING_USER
-# from environment variables, joins the meeting, records, uploads, and exits.
-CMD dbus-daemon --system --fork 2>/dev/null || true && \
-    pulseaudio --start --exit-idle-time=-1 && \
-    pactl load-module module-null-sink sink_name=SpeakerOutput 2>/dev/null && \
-    pactl set-default-sink SpeakerOutput 2>/dev/null && \
-    pactl set-default-source SpeakerOutput.monitor 2>/dev/null && \
+# Startup script that matches the official Zoom headless Linux sample:
+# 1. Start dbus (required for SDK internal IPC)
+# 2. Clean pulse state and start PulseAudio in system mode
+# 3. Create virtual speaker sink
+# 4. Write zoomus.conf
+# 5. Run the bot
+CMD set -e && \
+    mkdir -p /var/run/dbus && \
+    dbus-uuidgen > /var/lib/dbus/machine-id 2>/dev/null || true && \
+    dbus-daemon --config-file=/usr/share/dbus-1/system.conf --print-address 2>/dev/null || true && \
+    rm -rf /var/run/pulse /var/lib/pulse /root/.config/pulse && \
+    mkdir -p /root/.config/pulse && cp -r /etc/pulse/* /root/.config/pulse/ && \
+    pulseaudio -D --exit-idle-time=-1 --system --disallow-exit 2>/dev/null || true && \
+    pactl load-module module-null-sink sink_name=SpeakerOutput 2>/dev/null || true && \
+    pactl set-default-sink SpeakerOutput 2>/dev/null || true && \
+    pactl set-default-source SpeakerOutput.monitor 2>/dev/null || true && \
+    echo -e "[General]\nsystem.audio.type=default" > /root/.config/zoomus.conf && \
     python3 -m src.main
