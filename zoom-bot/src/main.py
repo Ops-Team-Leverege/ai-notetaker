@@ -29,26 +29,9 @@ logging.basicConfig(
 logger = logging.getLogger("zoom-bot")
 
 # =============================================================================
-# STEP 2: Cloud Logging — direct API client (not handler-based)
+# STEP 2: Cloud Logging — shared log() function
 # =============================================================================
-_cloud_logger = None
-try:
-    import google.cloud.logging as gcl
-    _logging_client = gcl.Client()
-    _cloud_logger = _logging_client.logger("zoom-bot")
-    print("[zoom-bot] Cloud Logging direct client initialized", flush=True)
-except Exception as e:
-    print(f"[zoom-bot] Cloud Logging not available: {e}", flush=True)
-
-
-def log(msg):
-    """Log to both stdout and Cloud Logging (direct API, not handler)."""
-    print(f"[zoom-bot] {msg}", flush=True)
-    if _cloud_logger:
-        try:
-            _cloud_logger.log_text(f"[zoom-bot] {msg}", severity="INFO")
-        except Exception:
-            pass
+from src.log import log
 
 
 # =============================================================================

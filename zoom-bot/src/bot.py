@@ -3,25 +3,12 @@ Zoom Meeting Bot — joins meetings via the Zoom Meeting SDK and captures raw au
 
 Uses zoom-meeting-sdk Python bindings (https://pypi.org/project/zoom-meeting-sdk/).
 Runs inside Docker with PulseAudio virtual sink for headless audio.
-
-Flow:
-  1. Fetch SDK credentials from Secret Manager (zoom-sdk-credentials)
-  2. Fetch S2S OAuth credentials from Secret Manager (zoom-account-credentials)
-  3. Get S2S access token → fetch ZAK token for meeting join
-  4. Generate JWT for SDK auth using SDK credentials
-  5. Join meeting by number + passcode + ZAK token
-  6. Subscribe to raw audio data callback
-  7. Accumulate PCM frames → WAV on meeting end
-  8. Upload WAV to GCS
-  9. Enqueue Cloud Tasks transcription job
-  10. Exit
 """
 
 import os
 import io
 import sys
 import wave
-import array
 import hashlib
 import json
 import logging
@@ -34,18 +21,12 @@ from typing import Optional
 import jwt
 import requests
 
+from src.log import log
+
 logger = logging.getLogger("zoom-bot")
-logger.setLevel(logging.INFO)
 
-# Ensure stdout handler exists (main.py sets this up, but be safe for direct imports)
-if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
-    _stdout_handler = logging.StreamHandler(sys.stdout)
-    _stdout_handler.setFormatter(logging.Formatter("%(asctime)s [zoom-bot] %(levelname)s %(message)s"))
-    logger.addHandler(_stdout_handler)
-
-# SDK sample rate — the SDK delivers 32kHz mono PCM by default
 SDK_SAMPLE_RATE = 32000
-SDK_SAMPLE_WIDTH = 2  # 16-bit PCM
+SDK_SAMPLE_WIDTH = 2
 SDK_CHANNELS = 1
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "ai-meeting-notetaker-490206")
@@ -56,7 +37,6 @@ WORKER_URL = os.environ.get("TRANSCRIPTION_WORKER_URL", "")
 
 
 def generate_sdk_jwt(client_id: str, client_secret: str) -> str:
-    """Generate a JWT token for Zoom Meeting SDK authentication."""
     iat = datetime.utcnow()
     exp = iat + timedelta(hours=24)
     payload = {
@@ -69,12 +49,10 @@ def generate_sdk_jwt(client_id: str, client_secret: str) -> str:
 
 
 def hash_user_email(email: str) -> str:
-    """SHA-256 hash of email for GCS path scoping."""
     return hashlib.sha256(email.encode()).hexdigest()
 
 
 def pcm_to_wav(pcm_data: bytes, sample_rate: int = SDK_SAMPLE_RATE) -> bytes:
-    """Convert raw PCM bytes to WAV format in memory."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(SDK_CHANNELS)
@@ -85,11 +63,6 @@ def pcm_to_wav(pcm_data: bytes, sample_rate: int = SDK_SAMPLE_RATE) -> bytes:
 
 
 def fetch_sdk_credentials() -> dict:
-    """Fetch Meeting SDK credentials from Secret Manager (zoom-sdk-credentials).
-
-    Returns {"client_id":"...","client_secret":"..."} from the General App.
-    Used to initialize and authenticate the Zoom Meeting SDK.
-    """
     from google.cloud import secretmanager
     client = secretmanager.SecretManagerServiceClient()
     name = f"projects/{PROJECT_ID}/secrets/zoom-sdk-credentials/versions/latest"
@@ -98,11 +71,6 @@ def fetch_sdk_credentials() -> dict:
 
 
 def fetch_s2s_credentials() -> dict:
-    """Fetch S2S OAuth credentials from Secret Manager (zoom-account-credentials).
-
-    Returns {"account_id":"...","client_id":"...","client_secret":"..."} from the S2S OAuth App.
-    Used to obtain access tokens for the Zoom REST API (ZAK token fetch).
-    """
     from google.cloud import secretmanager
     client = secretmanager.SecretManagerServiceClient()
     name = f"projects/{PROJECT_ID}/secrets/zoom-account-credentials/versions/latest"
@@ -111,7 +79,6 @@ def fetch_s2s_credentials() -> dict:
 
 
 def get_s2s_access_token(creds: dict) -> str:
-    """Get a Zoom S2S OAuth access token using account_credentials grant."""
     basic_auth = (creds["client_id"], creds["client_secret"])
     resp = requests.post(
         "https://zoom.us/oauth/token",
@@ -128,11 +95,6 @@ def get_s2s_access_token(creds: dict) -> str:
 
 
 def fetch_zak_token(access_token: str) -> str:
-    """Fetch a ZAK token for the authenticated user (ai-notetaker@leverege.com).
-
-    The ZAK token is required since Feb 23, 2026 for Zoom OBF compliance.
-    It expires after 90 minutes — fetch a fresh one per meeting join.
-    """
     resp = requests.get(
         "https://api.zoom.us/v2/users/me/token",
         params={"type": "zak"},
@@ -144,7 +106,6 @@ def fetch_zak_token(access_token: str) -> str:
 
 
 def upload_wav_to_gcs(wav_data: bytes, meeting_id: str, owning_user: str) -> str:
-    """Upload WAV audio to GCS and return the gs:// URI."""
     from google.cloud import storage
     user_hash = hash_user_email(owning_user)
     gcs_path = f"{user_hash}/{meeting_id}/audio.wav"
@@ -153,12 +114,11 @@ def upload_wav_to_gcs(wav_data: bytes, meeting_id: str, owning_user: str) -> str
     blob = bucket.blob(gcs_path)
     blob.upload_from_string(wav_data, content_type="audio/wav")
     uri = f"gs://{AUDIO_BUCKET}/{gcs_path}"
-    logger.info("Uploaded audio to %s", uri)
+    log(f"Uploaded audio to {uri}")
     return uri
 
 
 def enqueue_transcription(meeting_id: str, audio_gcs_path: str, owning_user: str) -> None:
-    """Create a Cloud Tasks entry to trigger the transcription worker."""
     from google.cloud import tasks_v2
     client = tasks_v2.CloudTasksClient()
     parent = client.queue_path(PROJECT_ID, REGION, QUEUE_NAME)
@@ -179,24 +139,18 @@ def enqueue_transcription(meeting_id: str, audio_gcs_path: str, owning_user: str
             }
         },
     })
-    logger.info("Enqueued transcription task for meeting %s", meeting_id)
+    log(f"Enqueued transcription task for meeting {meeting_id}")
 
 
 class ZoomMeetingBot:
-    """
-    Joins a Zoom meeting via the Meeting SDK, captures raw audio,
-    and uploads the recording when the meeting ends.
-    """
-
     def __init__(self, meeting_id: str, meeting_number: int, passcode: str,
                  owning_user: str, display_name: str = "Leverege Notetaker"):
-        self.meeting_id = meeting_id          # Our internal UUID
-        self.meeting_number = meeting_number  # Zoom numeric meeting ID
+        self.meeting_id = meeting_id
+        self.meeting_number = meeting_number
         self.passcode = passcode
         self.owning_user = owning_user
         self.display_name = display_name
 
-        # SDK objects (set during init)
         self._meeting_service = None
         self._auth_service = None
         self._setting_service = None
@@ -206,13 +160,11 @@ class ZoomMeetingBot:
         self._participants_ctrl = None
         self._my_participant_id = None
 
-        # Audio accumulator
         self._pcm_chunks: list[bytes] = []
         self._is_recording = False
         self._meeting_ended = False
         self._zak_token: Optional[str] = None
 
-        # GLib main loop
         self._main_loop = None
         self._shutdown_requested = False
 
@@ -222,89 +174,53 @@ class ZoomMeetingBot:
         gi.require_version("GLib", "2.0")
         from gi.repository import GLib
 
-        print(f"[zoom-bot] Bot.run() starting for meeting {self.meeting_number}", flush=True)
-        logger.info("Bot.run() starting for meeting_id=%s meeting_number=%d user=%s",
-                     self.meeting_id, self.meeting_number, self.owning_user)
+        log(f"Bot.run() starting for meeting {self.meeting_number} user={self.owning_user}")
 
-        # Fetch credentials from two separate secrets
-        try:
-            print("[zoom-bot] Fetching SDK credentials from Secret Manager...", flush=True)
-            logger.info("Fetching SDK credentials from zoom-sdk-credentials...")
-            sdk_creds = fetch_sdk_credentials()
-            print(f"[zoom-bot] SDK credentials fetched (client_id={sdk_creds.get('client_id', '?')[:8]}...)", flush=True)
-            logger.info("SDK credentials fetched (client_id=%s...)", sdk_creds.get("client_id", "?")[:8])
-        except Exception:
-            print(f"[zoom-bot] FAILED to fetch SDK credentials: {traceback.format_exc()}", flush=True)
-            logger.exception("Failed to fetch SDK credentials")
-            raise
+        # --- Fetch credentials ---
+        log("Fetching SDK credentials from Secret Manager...")
+        sdk_creds = fetch_sdk_credentials()
+        log(f"SDK credentials OK (client_id={sdk_creds.get('client_id', '?')[:8]}...)")
 
-        try:
-            print("[zoom-bot] Fetching S2S OAuth credentials from Secret Manager...", flush=True)
-            logger.info("Fetching S2S OAuth credentials from zoom-account-credentials...")
-            s2s_creds = fetch_s2s_credentials()
-            print(f"[zoom-bot] S2S credentials fetched (account_id={s2s_creds.get('account_id', '?')[:8]}...)", flush=True)
-            logger.info("S2S credentials fetched (account_id=%s...)", s2s_creds.get("account_id", "?")[:8])
-        except Exception:
-            print(f"[zoom-bot] FAILED to fetch S2S credentials: {traceback.format_exc()}", flush=True)
-            logger.exception("Failed to fetch S2S credentials")
-            raise
+        log("Fetching S2S OAuth credentials from Secret Manager...")
+        s2s_creds = fetch_s2s_credentials()
+        log(f"S2S credentials OK (account_id={s2s_creds.get('account_id', '?')[:8]}...)")
 
-        try:
-            print("[zoom-bot] Getting S2S access token from Zoom...", flush=True)
-            logger.info("Getting S2S access token...")
-            access_token = get_s2s_access_token(s2s_creds)
-            print(f"[zoom-bot] S2S access token obtained (length={len(access_token)})", flush=True)
-            logger.info("S2S access token obtained (length=%d)", len(access_token))
-        except Exception:
-            print(f"[zoom-bot] FAILED to get S2S access token: {traceback.format_exc()}", flush=True)
-            logger.exception("Failed to get S2S access token")
-            raise
+        log("Getting S2S access token from Zoom...")
+        access_token = get_s2s_access_token(s2s_creds)
+        log(f"S2S access token OK (length={len(access_token)})")
 
-        try:
-            print("[zoom-bot] Fetching ZAK token from Zoom API...", flush=True)
-            logger.info("Fetching ZAK token...")
-            self._zak_token = fetch_zak_token(access_token)
-            print(f"[zoom-bot] ZAK token fetched (length={len(self._zak_token)})", flush=True)
-            logger.info("ZAK token fetched (length=%d)", len(self._zak_token))
-        except Exception:
-            print(f"[zoom-bot] FAILED to fetch ZAK token: {traceback.format_exc()}", flush=True)
-            logger.exception("Failed to fetch ZAK token")
-            raise
+        log("Fetching ZAK token from Zoom API...")
+        self._zak_token = fetch_zak_token(access_token)
+        log(f"ZAK token OK (length={len(self._zak_token)}, first10={self._zak_token[:10]}...)")
 
-        try:
-            print("[zoom-bot] Initializing Zoom Meeting SDK...", flush=True)
-            logger.info("Initializing Zoom Meeting SDK...")
-            self._init_sdk(sdk_creds)
-            print("[zoom-bot] SDK initialized successfully", flush=True)
-            logger.info("SDK initialized successfully")
-        except Exception:
-            print(f"[zoom-bot] FAILED to initialize SDK: {traceback.format_exc()}", flush=True)
-            logger.exception("Failed to initialize SDK")
-            raise
+        # --- Initialize SDK ---
+        log("Initializing Zoom Meeting SDK...")
+        self._init_sdk(sdk_creds)
+        log("SDK initialized, auth requested — waiting for callbacks via GLib main loop")
 
-        # Set up signal handlers for clean shutdown
+        # Set up signal handlers
         signal.signal(signal.SIGINT, self._on_signal)
         signal.signal(signal.SIGTERM, self._on_signal)
 
-        # Run GLib main loop (SDK events are dispatched here)
+        # Run GLib main loop — this BLOCKS until meeting ends or shutdown requested
         self._main_loop = GLib.MainLoop()
         GLib.timeout_add(100, self._check_shutdown)
 
+        log(">>> GLib.MainLoop().run() — BLOCKING until meeting ends <<<")
         try:
-            print("[zoom-bot] Starting GLib main loop (blocking until meeting ends)...", flush=True)
-            logger.info("Starting GLib main loop")
             self._main_loop.run()
         except Exception as e:
-            print(f"[zoom-bot] Main loop error: {e}", flush=True)
-            logger.error("Main loop error: %s", e)
+            log(f"GLib main loop error: {e}")
+            log(traceback.format_exc())
         finally:
+            log("GLib main loop exited, finalizing...")
             self._finalize()
 
     def _init_sdk(self, creds: dict) -> None:
         """Initialize the Zoom Meeting SDK, authenticate, and join."""
         import zoom_meeting_sdk as zoom
 
-        print("[zoom-bot] _init_sdk: creating InitParam...", flush=True)
+        log("_init_sdk: creating InitParam...")
         init_param = zoom.InitParam()
         init_param.strWebDomain = "https://zoom.us"
         init_param.strSupportUrl = "https://zoom.us"
@@ -312,63 +228,63 @@ class ZoomMeetingBot:
         init_param.emLanguageID = zoom.SDK_LANGUAGE_ID.LANGUAGE_English
         init_param.enableLogByDefault = True
 
-        print("[zoom-bot] _init_sdk: calling zoom.InitSDK()...", flush=True)
-        logger.info("Calling zoom.InitSDK()...")
+        log("_init_sdk: calling InitSDK()...")
         result = zoom.InitSDK(init_param)
-        print(f"[zoom-bot] _init_sdk: InitSDK returned {result}", flush=True)
+        log(f"_init_sdk: InitSDK returned {result} (SUCCESS={zoom.SDKERR_SUCCESS})")
         if result != zoom.SDKERR_SUCCESS:
             raise RuntimeError(f"InitSDK failed: {result}")
-        logger.info("InitSDK succeeded")
 
-        # Create services
-        print("[zoom-bot] _init_sdk: creating SDK services...", flush=True)
+        log("_init_sdk: creating SDK services...")
         self._meeting_service = zoom.CreateMeetingService()
         self._setting_service = zoom.CreateSettingService()
         self._auth_service = zoom.CreateAuthService()
-        print("[zoom-bot] _init_sdk: SDK services created", flush=True)
-        logger.info("SDK services created")
+        log("_init_sdk: SDK services created OK")
 
-        # Set meeting event callback
+        # Meeting status callback
         self._meeting_event = zoom.MeetingServiceEventCallbacks(
             onMeetingStatusChangedCallback=self._on_meeting_status_changed,
         )
         self._meeting_service.SetEvent(self._meeting_event)
+        log("_init_sdk: meeting event callback registered")
 
-        # Authenticate
+        # Auth callback
         self._auth_event = zoom.AuthServiceEventCallbacks(
             onAuthenticationReturnCallback=self._on_auth_return,
         )
         self._auth_service.SetEvent(self._auth_event)
+        log("_init_sdk: auth event callback registered")
+
+        # Generate JWT and authenticate
+        jwt_token = generate_sdk_jwt(creds["client_id"], creds["client_secret"])
+        log(f"_init_sdk: JWT generated (length={len(jwt_token)})")
 
         auth_context = zoom.AuthContext()
-        auth_context.jwt_token = generate_sdk_jwt(
-            creds["client_id"], creds["client_secret"]
-        )
-        print(f"[zoom-bot] _init_sdk: calling SDKAuth (client_id={creds['client_id'][:8]}...)...", flush=True)
-        logger.info("Calling SDKAuth with JWT (client_id=%s...)...", creds["client_id"][:8])
+        auth_context.jwt_token = jwt_token
+
+        log(f"_init_sdk: calling SDKAuth (client_id={creds['client_id'][:8]}...)...")
         auth_result = self._auth_service.SDKAuth(auth_context)
-        print(f"[zoom-bot] _init_sdk: SDKAuth returned {auth_result}", flush=True)
+        log(f"_init_sdk: SDKAuth returned {auth_result} (SUCCESS={zoom.SDKERR_SUCCESS})")
         if auth_result != zoom.SDKERR_SUCCESS:
             raise RuntimeError(f"SDKAuth failed: {auth_result}")
-        print("[zoom-bot] _init_sdk: SDKAuth success, waiting for auth callback...", flush=True)
-        logger.info("SDKAuth call returned success, waiting for auth callback...")
+        log("_init_sdk: SDKAuth dispatched, waiting for async auth callback...")
+
 
     def _on_auth_return(self, result) -> None:
-        """Called when SDK authentication completes."""
+        """Called when SDK authentication completes (async callback)."""
         import zoom_meeting_sdk as zoom
+        log(f"AUTH CALLBACK: result={result} (SUCCESS={zoom.AUTHRET_SUCCESS})")
         if result == zoom.AUTHRET_SUCCESS:
-            logger.info("SDK auth succeeded, joining meeting %d", self.meeting_number)
+            log("Auth succeeded, calling _join_meeting()...")
             self._join_meeting()
         else:
-            logger.error("SDK auth failed: %s", result)
+            log(f"AUTH FAILED: {result}")
             self._request_shutdown()
 
     def _join_meeting(self) -> None:
         """Join the Zoom meeting by number + passcode with ZAK token auth."""
         import zoom_meeting_sdk as zoom
 
-        logger.info("Preparing to join meeting %d as '%s' (ZAK length=%d)",
-                     self.meeting_number, self.display_name, len(self._zak_token or ""))
+        log(f"Joining meeting {self.meeting_number} as '{self.display_name}' (ZAK length={len(self._zak_token or '')})")
 
         join_param = zoom.JoinParam()
         join_param.userType = zoom.SDKUserType.SDK_UT_WITHOUT_LOGIN
@@ -384,95 +300,97 @@ class ZoomMeetingBot:
         param.isMyVoiceInMix = False
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
+        log(f"Calling meeting_service.Join() with number={self.meeting_number}...")
         join_result = self._meeting_service.Join(join_param)
-        logger.info("Join() returned: %s", join_result)
+        log(f"Join() returned: {join_result} (SUCCESS={zoom.SDKERR_SUCCESS})")
 
         # Auto-join audio
         audio_settings = self._setting_service.GetAudioSettings()
         audio_settings.EnableAutoJoinAudio(True)
-        logger.info("Auto-join audio enabled")
+        log("Auto-join audio enabled")
 
     def _on_meeting_status_changed(self, status, iResult) -> None:
-        """Called when meeting status changes."""
+        """Called when meeting status changes (async callback)."""
         import zoom_meeting_sdk as zoom
-        logger.info("Meeting status changed: %s (iResult=%s)", status, iResult)
+        log(f"MEETING STATUS CHANGED: status={status} iResult={iResult}")
+        log(f"  INMEETING={zoom.MEETING_STATUS_INMEETING} ENDED={zoom.MEETING_STATUS_ENDED} FAILED={zoom.MEETING_STATUS_FAILED}")
 
         if status == zoom.MEETING_STATUS_INMEETING:
+            log("STATUS: IN MEETING — setting up audio recording")
             self._on_joined()
         elif status == zoom.MEETING_STATUS_ENDED:
-            logger.info("Meeting ended")
+            log("STATUS: MEETING ENDED")
             self._meeting_ended = True
             self._request_shutdown()
         elif status == zoom.MEETING_STATUS_FAILED:
-            logger.error("Meeting join failed: %s", iResult)
+            log(f"STATUS: MEETING JOIN FAILED (iResult={iResult})")
             self._request_shutdown()
+        else:
+            log(f"STATUS: other ({status})")
 
     def _on_joined(self) -> None:
         """Called when we've successfully joined the meeting."""
         import zoom_meeting_sdk as zoom
         from gi.repository import GLib
 
-        logger.info("In meeting %d — setting up audio recording", self.meeting_number)
+        log(f"In meeting {self.meeting_number} — setting up audio recording")
 
-        # Accept any recording consent reminders automatically
         self._reminder_event = zoom.MeetingReminderEventCallbacks(
             onReminderNotifyCallback=self._on_reminder,
         )
         reminder_ctrl = self._meeting_service.GetMeetingReminderController()
         reminder_ctrl.SetEvent(self._reminder_event)
 
-        # Set up recording privilege callback
         self._recording_ctrl = self._meeting_service.GetMeetingRecordingController()
         self._recording_event = zoom.MeetingRecordingCtrlEventCallbacks(
             onRecordPrivilegeChangedCallback=self._on_record_privilege_changed,
         )
         self._recording_ctrl.SetEvent(self._recording_event)
 
-        # Get participant info
         self._participants_ctrl = self._meeting_service.GetMeetingParticipantsController()
         self._my_participant_id = self._participants_ctrl.GetMySelfUser().GetUserID()
+        log(f"My participant ID: {self._my_participant_id}")
 
-        # Join VoIP (required for raw audio after SDK 6.3.5)
         audio_ctrl = self._meeting_service.GetMeetingAudioController()
         audio_ctrl.JoinVoip()
+        log("JoinVoip() called")
 
-        # Try to start raw recording after a short delay
         GLib.timeout_add_seconds(1, self._start_raw_recording)
+        log("Scheduled raw recording start in 1 second")
 
     def _on_reminder(self, content, handler) -> None:
-        """Auto-accept meeting reminders (recording consent, etc.)."""
+        log("Reminder received, auto-accepting")
         if handler:
             handler.Accept()
 
     def _on_record_privilege_changed(self, can_rec) -> None:
-        """Called when recording privilege changes."""
         from gi.repository import GLib
-        logger.info("Recording privilege changed: %s", can_rec)
+        log(f"Recording privilege changed: {can_rec}")
         if can_rec:
             GLib.timeout_add_seconds(1, self._start_raw_recording)
 
     def _start_raw_recording(self) -> bool:
-        """Start raw audio recording. Returns False to cancel GLib timeout."""
         import zoom_meeting_sdk as zoom
 
         if self._is_recording:
             return False
 
         can_start = self._recording_ctrl.CanStartRawRecording()
+        log(f"CanStartRawRecording: {can_start} (SUCCESS={zoom.SDKERR_SUCCESS})")
         if can_start != zoom.SDKERR_SUCCESS:
             self._recording_ctrl.RequestLocalRecordingPrivilege()
-            logger.info("Requested recording privilege, waiting...")
+            log("Requested recording privilege, waiting...")
             return False
 
         start_result = self._recording_ctrl.StartRawRecording()
+        log(f"StartRawRecording: {start_result}")
         if start_result != zoom.SDKERR_SUCCESS:
-            logger.error("StartRawRecording failed: %s", start_result)
+            log(f"StartRawRecording FAILED: {start_result}")
             return False
 
-        # Subscribe to raw audio
         self._audio_helper = zoom.GetAudioRawdataHelper()
         if not self._audio_helper:
-            logger.error("GetAudioRawdataHelper returned None")
+            log("GetAudioRawdataHelper returned None")
             return False
 
         self._audio_source = zoom.ZoomSDKAudioRawDataDelegateCallbacks(
@@ -480,15 +398,13 @@ class ZoomMeetingBot:
             collectPerformanceData=False,
         )
         subscribe_result = self._audio_helper.subscribe(self._audio_source, False)
-        logger.info("Audio subscribe result: %s", subscribe_result)
+        log(f"Audio subscribe result: {subscribe_result}")
 
         self._is_recording = True
-        logger.info("Raw audio recording started")
+        log("Raw audio recording STARTED")
         return False
 
     def _on_audio_data(self, data, node_id) -> None:
-        """Called for each chunk of raw PCM audio from a participant."""
-        # Skip our own audio
         if node_id == self._my_participant_id:
             return
         pcm_bytes = data.GetBuffer()
@@ -496,78 +412,88 @@ class ZoomMeetingBot:
             self._pcm_chunks.append(pcm_bytes)
 
     def _on_signal(self, signum, frame) -> None:
-        """Handle SIGINT/SIGTERM."""
-        logger.info("Received signal %d", signum)
+        log(f"Received signal {signum}")
         self._request_shutdown()
 
     def _request_shutdown(self) -> None:
-        """Request clean shutdown via GLib main loop."""
+        log("Shutdown requested")
         self._shutdown_requested = True
 
     def _check_shutdown(self) -> bool:
-        """GLib timeout callback — returns False to stop when shutdown requested."""
         if self._shutdown_requested:
+            log("_check_shutdown: quitting GLib main loop")
             if self._main_loop:
                 self._main_loop.quit()
             return False
         return True
 
     def _finalize(self) -> None:
-        """Clean up SDK, upload audio, enqueue transcription."""
-        import zoom_meeting_sdk as zoom
+        """Clean up SDK resources and upload captured audio."""
+        import traceback
 
-        logger.info("Finalizing — meeting_ended=%s, chunks=%d",
-                     self._meeting_ended, len(self._pcm_chunks))
+        log("_finalize: starting cleanup...")
 
-        # Stop recording
+        # Stop raw recording
         if self._is_recording and self._recording_ctrl:
             try:
+                import zoom_meeting_sdk as zoom
                 self._recording_ctrl.StopRawRecording()
+                log("_finalize: raw recording stopped")
             except Exception as e:
-                logger.warning("StopRawRecording error: %s", e)
+                log(f"_finalize: StopRawRecording error: {e}")
 
         # Unsubscribe audio
-        if self._audio_helper:
+        if self._audio_helper and self._audio_source:
             try:
                 self._audio_helper.unSubscribe()
-            except Exception:
-                pass
+                log("_finalize: audio unsubscribed")
+            except Exception as e:
+                log(f"_finalize: audio unsubscribe error: {e}")
 
         # Leave meeting
         if self._meeting_service:
             try:
-                status = self._meeting_service.GetMeetingStatus()
-                if status != zoom.MEETING_STATUS_IDLE:
-                    self._meeting_service.Leave(zoom.LEAVE_MEETING)
-                    time.sleep(1)
-            except Exception:
-                pass
+                import zoom_meeting_sdk as zoom
+                self._meeting_service.Leave(zoom.LEAVE_MEETING)
+                log("_finalize: left meeting")
+            except Exception as e:
+                log(f"_finalize: Leave error: {e}")
 
-        # Destroy services
-        for svc, destroy_fn in [
-            (self._meeting_service, zoom.DestroyMeetingService),
-            (self._setting_service, zoom.DestroySettingService),
-            (self._auth_service, zoom.DestroyAuthService),
-        ]:
-            if svc:
-                try:
-                    destroy_fn(svc)
-                except Exception:
-                    pass
-
+        # Destroy SDK services
         try:
+            import zoom_meeting_sdk as zoom
+            if self._meeting_service:
+                zoom.DestroyMeetingService(self._meeting_service)
+                log("_finalize: meeting service destroyed")
+            if self._auth_service:
+                zoom.DestroyAuthService(self._auth_service)
+                log("_finalize: auth service destroyed")
+            if self._setting_service:
+                zoom.DestroySettingService(self._setting_service)
+                log("_finalize: setting service destroyed")
             zoom.CleanUPSDK()
-        except Exception:
-            pass
+            log("_finalize: SDK cleaned up")
+        except Exception as e:
+            log(f"_finalize: SDK cleanup error: {e}")
 
         # Upload audio if we captured anything
-        if self._pcm_chunks:
-            pcm_data = b"".join(self._pcm_chunks)
-            logger.info("Captured %d bytes of PCM audio", len(pcm_data))
-            wav_data = pcm_to_wav(pcm_data)
-            gcs_uri = upload_wav_to_gcs(wav_data, self.meeting_id, self.owning_user)
-            enqueue_transcription(self.meeting_id, gcs_uri, self.owning_user)
-        else:
-            logger.warning("No audio captured")
+        total_bytes = sum(len(c) for c in self._pcm_chunks)
+        log(f"_finalize: captured {total_bytes} bytes of PCM audio ({len(self._pcm_chunks)} chunks)")
 
-        logger.info("Done")
+        if total_bytes > 0:
+            try:
+                wav_data = pcm_to_wav(b"".join(self._pcm_chunks))
+                log(f"_finalize: WAV encoded ({len(wav_data)} bytes)")
+
+                gcs_uri = upload_wav_to_gcs(wav_data, self.meeting_id, self.owning_user)
+                log(f"_finalize: audio uploaded to {gcs_uri}")
+
+                enqueue_transcription(self.meeting_id, gcs_uri, self.owning_user)
+                log("_finalize: transcription task enqueued")
+            except Exception as e:
+                log(f"_finalize: upload/enqueue FAILED: {e}")
+                log(traceback.format_exc())
+        else:
+            log("_finalize: no audio captured, skipping upload")
+
+        log("_finalize: done")
