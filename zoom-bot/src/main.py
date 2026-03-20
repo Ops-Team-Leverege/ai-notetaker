@@ -192,8 +192,12 @@ if __name__ == "__main__":
         log(f"=== Shutting down (exit_code={_exit_code}) ===")
         sys.stdout.flush()
         sys.stderr.flush()
-        time.sleep(3)
-        _delete_own_vm()
-        log("Goodbye.")
+        # Wait 10s for Cloud Logging to flush before deleting VM
+        log("Waiting 10s for log flush...")
+        time.sleep(10)
+        # TEMPORARILY DISABLED: VM self-deletion
+        # Keeping VM alive so we can SSH in and debug
+        # _delete_own_vm()
+        log("Goodbye. (VM self-deletion DISABLED for debugging — delete manually)")
         sys.stdout.flush()
     sys.exit(_exit_code)
