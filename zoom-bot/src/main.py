@@ -15,6 +15,12 @@ import logging
 import time
 import traceback
 
+# Disable gRPC fork support BEFORE any gRPC imports.
+# The Zoom SDK uses internal threading/forking that conflicts with gRPC's
+# fork handler, causing the auth callback to never fire.
+os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
+os.environ["GRPC_POLL_STRATEGY"] = "epoll1"
+
 # =============================================================================
 # STEP 1: Basic stdout logging
 # =============================================================================

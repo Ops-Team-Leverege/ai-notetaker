@@ -66,6 +66,10 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 COPY zoom-bot/ .
 
 ENV PYTHONUNBUFFERED=1
+# Disable gRPC fork support — conflicts with Zoom SDK internal threading
+# and prevents the auth callback from firing
+ENV GRPC_ENABLE_FORK_SUPPORT=0
+ENV GRPC_POLL_STRATEGY=epoll1
 
 # Startup script that matches the official Zoom headless Linux sample:
 # 1. Start dbus (required for SDK internal IPC)
