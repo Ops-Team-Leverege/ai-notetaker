@@ -366,6 +366,13 @@ class ZoomMeetingBot:
         auth_context = zoom.AuthContext()
         auth_context.jwt_token = jwt_token
 
+        # SDK 6.7.5 added publicAppKey to AuthContext — try setting it if available
+        try:
+            auth_context.publicAppKey = creds["client_id"]
+            log(f"_init_sdk: publicAppKey set to {creds['client_id'][:8]}...")
+        except AttributeError:
+            log("_init_sdk: publicAppKey not available in this SDK binding version (expected for zoom-meeting-sdk<=0.0.27)")
+
         log(f"_init_sdk: calling SDKAuth (client_id={creds['client_id'][:8]}...)...")
         auth_result = self._auth_service.SDKAuth(auth_context)
         log(f"_init_sdk: SDKAuth returned {auth_result} (SUCCESS={zoom.SDKERR_SUCCESS})")
